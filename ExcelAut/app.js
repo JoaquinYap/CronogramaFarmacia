@@ -13,6 +13,7 @@
     ];
 
     const DAY_ABBRS = ['D', 'L', 'M', 'M', 'J', 'V', 'S']; // 0=Sun..6=Sat
+    const DAY_NAMES_FULL = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     
     const FIXED_HOLIDAYS = [
         { m: 0, d: 1, name: 'Año Nuevo' },
@@ -38,8 +39,23 @@
     let employees = [];
     let employeeIdCounter = 0;
     let copiedPattern = null; // Will store a 7-day pattern
+    let copiedDayPattern = null; // Will store a single day pattern
     let generatedSchedule = null;
     let currentHolidays = [];
+
+    // Brush state
+    let activeBrush = null;
+    let customBrushes = [];
+    const DEFAULT_BRUSHES = [
+        { id: 'b1', label: '7-11', type: 'work', start: '07:00', end: '11:00' },
+        { id: 'b2', label: '7-14', type: 'work', start: '07:00', end: '14:00' },
+        { id: 'b3', label: '7-15', type: 'work', start: '07:00', end: '15:00' },
+        { id: 'b4', label: '7-17', type: 'work', start: '07:00', end: '17:00' },
+        { id: 'b5', label: '8-13', type: 'work', start: '08:00', end: '13:00' },
+        { id: 'b6', label: '9-14', type: 'work', start: '09:00', end: '14:00' },
+        { id: 'f', label: 'Franco', type: 'franco', start: '', end: '' },
+        { id: 'l', label: 'L.A.R.', type: 'lar', start: '', end: '' }
+    ];
 
     // Theme state
     let currentTheme = localStorage.getItem('cronoexcel_theme') || 'dark';
@@ -66,6 +82,9 @@
         sectionEmployees: $('#section-employees'),
         sectionPreview: $('#section-preview'),
         toastContainer: $('#toast-container'),
+        brushToolbar: $('#brush-toolbar'),
+        brushList: $('#brush-list'),
+        btnCloseBrush: $('#btn-close-brush'),
     };
 
     // ───── INIT ─────
@@ -85,6 +104,62 @@
         }
         
         updateStepIndicator(1);
+        initBrushToolbar();
+    }
+
+    // ───── BRUSH TOOLBAR ─────
+    function renderBrushToolbar() {
+        DOM.brushList.innerHTML = '';
+        const allBrushes = [...DEFAULT_BRUSHES, ...customBrushes];
+        allBrushes.forEach(brush => {
+            const btn = document.createElement('button');
+            btn.className = `brush-btn ${activeBrush === brush.id ? 'active' : ''}`;
+            btn.textContent = brush.label;
+            btn.onclick = () => {
+                activeBrush = activeBrush === brush.id ? null : brush.id;
+                document.body.classList.toggle('brush-active', activeBrush !== null);
+                renderBrushToolbar();
+            };
+            DOM.brushList.appendChild(btn);
+        });
+
+        const btnAdd = document.createElement('button');
+        btnAdd.className = 'brush-btn';
+        btnAdd.textContent = '+ Otro...';
+        btnAdd.onclick = () => {
+            const start = prompt('Hora de inicio (ej: 06:00):', '06:00');
+            if (!start) return;
+            const end = prompt('Hora de fin (ej: 13:00):', '13:00');
+            if (!end) return;
+            const id = 'c' + Date.now();
+            // simple parse to format label e.g., 06-13
+            const sl = start.split(':')[0];
+            const el = end.split(':')[0];
+            customBrushes.push({ id, label: `${sl}-${el}`, type: 'work', start, end });
+            activeBrush = id;
+            document.body.classList.toggle('brush-active', true);
+            renderBrushToolbar();
+        };
+        DOM.brushList.appendChild(btnAdd);
+    }
+
+    function initBrushToolbar() {
+        const brushFab = $('#brush-fab');
+        
+        renderBrushToolbar();
+        
+        brushFab.addEventListener('click', () => {
+            DOM.brushToolbar.classList.remove('hidden');
+            brushFab.classList.add('hidden');
+        });
+
+        DOM.btnCloseBrush.addEventListener('click', () => {
+            activeBrush = null;
+            document.body.classList.remove('brush-active');
+            renderBrushToolbar();
+            DOM.brushToolbar.classList.add('hidden');
+            brushFab.classList.remove('hidden');
+        });
     }
 
     // ───── THEME ─────
@@ -176,32 +251,8 @@
     }
 
     function addCustomHoliday() {
-        const maxDays = getDaysInMonth(parseInt(DOM.yearInput.value), parseInt(DOM.monthSelect.value));
-        const day = prompt(`Ingresa el día del feriado (1-${maxDays}):`);
-        if (!day) return;
-        const d = parseInt(day);
-        if (isNaN(d) || d < 1 || d > maxDays) {
-            toast('Día inválido', 'error');
-            return;
-        }
-        if (isHoliday(d)) {
-            toast('El feriado ya existe', 'warning');
-            return;
-        }
-        const name = prompt('Nombre del feriado:') || 'Feriado Extra';
-        currentHolidays.push({ day: d, name, custom: true });
-        currentHolidays.sort((a, b) => a.day - b.day);
-
-        employees.forEach(emp => {
-            if (emp.days && emp.days[d - 1]) {
-                emp.days[d - 1].type = 'franco';
-                emp.days[d - 1].start = '';
-                emp.days[d - 1].end = '';
-            }
-        });
-
-        renderHolidays();
-        reRenderAllEmployeeGrids();
+        $('#add-holiday-form').style.display = 'flex';
+        $('#new-holiday-day').focus();
     }
 
     // ───── EMPLOYEE DAYS LOGIC ─────
@@ -279,6 +330,49 @@
     function bindEvents() {
         DOM.btnThemeToggle.addEventListener('click', toggleTheme);
         $('#btn-add-holiday').addEventListener('click', addCustomHoliday);
+        
+        $('#btn-cancel-holiday').addEventListener('click', () => {
+            $('#add-holiday-form').style.display = 'none';
+            $('#new-holiday-day').value = '';
+            $('#new-holiday-name').value = '';
+        });
+
+        $('#btn-confirm-holiday').addEventListener('click', () => {
+            const maxDays = getDaysInMonth(parseInt(DOM.yearInput.value), parseInt(DOM.monthSelect.value));
+            const dayInput = $('#new-holiday-day').value;
+            const nameInput = $('#new-holiday-name').value;
+            
+            if (!dayInput) { toast('Ingresa el día', 'warning'); return; }
+            const d = parseInt(dayInput);
+            if (isNaN(d) || d < 1 || d > maxDays) {
+                toast('Día inválido', 'error');
+                return;
+            }
+            if (isHoliday(d)) {
+                toast('El feriado ya existe', 'warning');
+                return;
+            }
+            
+            const name = nameInput || 'Feriado Extra';
+            currentHolidays.push({ day: d, name, custom: true });
+            currentHolidays.sort((a, b) => a.day - b.day);
+
+            employees.forEach(emp => {
+                if (emp.days && emp.days[d - 1]) {
+                    emp.days[d - 1].type = 'franco';
+                    emp.days[d - 1].start = '';
+                    emp.days[d - 1].end = '';
+                }
+            });
+
+            renderHolidays();
+            reRenderAllEmployeeGrids();
+            
+            $('#add-holiday-form').style.display = 'none';
+            $('#new-holiday-day').value = '';
+            $('#new-holiday-name').value = '';
+            toast('Feriado agregado', 'success');
+        });
         DOM.monthSelect.addEventListener('change', onMonthYearChange);
         DOM.yearInput.addEventListener('change', onMonthYearChange);
 
@@ -325,9 +419,16 @@
             if (num === activeStep) s.classList.add('active');
             else if (num < activeStep) s.classList.add('completed');
         });
-        lines.forEach((l, i) => {
-            l.classList.toggle('completed', i + 1 < activeStep);
+        $$('.step-line').forEach((l, idx) => {
+            l.classList.toggle('active', idx < activeStep - 1);
         });
+        
+        // Show brush toolbar only in Employees view
+        if (activeStep === 2) {
+            DOM.brushToolbar.classList.remove('hidden');
+        } else {
+            DOM.brushToolbar.classList.add('hidden');
+        }
     }
 
     function toast(message, type = 'info') {
@@ -392,19 +493,72 @@
         hoursInput.value = emp.hours;
 
         nameInput.addEventListener('input', () => { emp.name = nameInput.value; });
-        hoursInput.addEventListener('input', () => { emp.hours = parseInt(hoursInput.value) || 0; });
+        hoursInput.addEventListener('input', () => { 
+            emp.hours = parseInt(hoursInput.value) || 0; 
+            recalcLiveHours(emp.id, card);
+        });
+
+        card.querySelector('.btn-duplicate-employee').addEventListener('click', () => {
+            const clonedDays = emp.days.map(d => ({ ...d }));
+            addEmployee({
+                name: emp.name ? emp.name + ' (Copia)' : '',
+                hours: emp.hours,
+                larEnabled: emp.larEnabled,
+                larStart: emp.larStart,
+                larEnd: emp.larEnd,
+                larHoursPerDay: emp.larHoursPerDay,
+                days: clonedDays
+            });
+            toast('Empleado duplicado', 'success');
+        });
 
         card.querySelector('.btn-delete-employee').addEventListener('click', () => {
             if (employees.length <= 1) {
                 toast('Debe haber al menos un empleado', 'warning');
                 return;
             }
-            removeEmployee(emp.id);
-            toast('Empleado eliminado', 'info');
+            
+            const modal = $('#delete-confirm-modal');
+            const msg = $('#delete-confirm-msg');
+            const btnConfirm = $('#btn-confirm-delete');
+            const btnCancel = $('#btn-cancel-delete');
+            
+            const empName = emp.name || `Empleado ${emp.id}`;
+            msg.textContent = `¿Estás seguro de que querés eliminar a ${empName}? Se perderán todos sus horarios.`;
+            modal.style.display = 'flex';
+            
+            const cleanup = () => {
+                modal.style.display = 'none';
+                btnConfirm.removeEventListener('click', onConfirm);
+                btnCancel.removeEventListener('click', onCancel);
+            };
+            
+            const onConfirm = () => {
+                removeEmployee(emp.id);
+                toast('Empleado eliminado', 'info');
+                cleanup();
+            };
+            
+            const onCancel = () => cleanup();
+            
+            btnConfirm.addEventListener('click', onConfirm);
+            btnCancel.addEventListener('click', onCancel);
         });
 
         const body = card.querySelector('.employee-card-body');
         card.querySelector('.btn-toggle-employee').addEventListener('click', (e) => {
+            const isCollapsing = !body.classList.contains('collapsed');
+            if (!isCollapsing) {
+                // Auto-collapse others
+                $$('.employee-card').forEach(otherCard => {
+                    if (otherCard !== card) {
+                        const otherBody = otherCard.querySelector('.employee-card-body');
+                        if (otherBody) otherBody.classList.add('collapsed');
+                        const otherSvg = otherCard.querySelector('.btn-toggle-employee svg');
+                        if (otherSvg) otherSvg.style.transform = 'rotate(-90deg)';
+                    }
+                });
+            }
             body.classList.toggle('collapsed');
             const svg = e.currentTarget.querySelector('svg');
             svg.style.transform = body.classList.contains('collapsed') ? 'rotate(-90deg)' : '';
@@ -477,7 +631,7 @@
         });
 
         renderWeeksGrid(card.querySelector('.employee-weeks-container'), emp.id);
-
+        recalcLiveHours(emp.id, card);
         DOM.employeesContainer.appendChild(card);
     }
 
@@ -568,7 +722,7 @@
                 label.className = `day-label ${isRed ? 'is-holiday' : ''}`;
                 
                 const extra = hol ? `<span style="font-size:0.65rem; opacity:0.8; margin-left:4px;">(Feriado)</span>` : '';
-                label.innerHTML = `<span class="day-abbr">${DAY_ABBRS[day.dow]}</span>${day.dayNum} ${extra}`;
+                label.innerHTML = `<span class="day-abbr">${DAY_NAMES_FULL[day.dow]}</span>${day.dayNum} ${extra}`;
 
                 const typeSelect = document.createElement('select');
                 TYPE_OPTIONS.forEach(opt => {
@@ -593,6 +747,15 @@
                 endInput.disabled = !isTimeEnabledInit;
                 endInput.style.display = isTimeEnabledInit ? '' : 'none';
 
+                startInput.addEventListener('change', () => {
+                    day.start = startInput.value;
+                    recalcLiveHours(emp.id, row.closest('.employee-card'));
+                });
+                endInput.addEventListener('change', () => {
+                    day.end = endInput.value;
+                    recalcLiveHours(emp.id, row.closest('.employee-card'));
+                });
+
                 typeSelect.addEventListener('change', () => {
                     day.type = typeSelect.value;
                     const isTimeEnabled = (day.type === 'work' || day.type === 'lar') && !(day.type === 'lar' && isRed);
@@ -607,14 +770,110 @@
                         day.start = startInput.value || '07:00';
                         day.end = endInput.value || (day.type === 'lar' ? '14:00' : '15:00');
                     }
+                    startInput.value = day.start;
+                    endInput.value = day.end;
+                    updateDayRowColor(row, day.type);
+                    recalcLiveHours(emp.id, row.closest('.employee-card'));
                 });
-                startInput.addEventListener('change', () => { day.start = startInput.value; });
-                endInput.addEventListener('change', () => { day.end = endInput.value; });
+
+                // Init visual state
+                updateDayRowColor(row, day.type);
+                typeSelect.dispatchEvent(new Event('change'));
+
+                const dayActions = document.createElement('div');
+                dayActions.className = 'day-actions';
+                dayActions.style.display = 'flex';
+                dayActions.style.gap = '4px';
+                dayActions.style.marginLeft = 'auto';
+
+                const btnCopyDay = document.createElement('button');
+                btnCopyDay.className = 'btn-icon btn-xs';
+                btnCopyDay.title = 'Copiar Día';
+                btnCopyDay.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+                
+                const btnPasteDay = document.createElement('button');
+                btnPasteDay.className = 'btn-icon btn-xs';
+                btnPasteDay.title = 'Pegar Día';
+                btnPasteDay.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>';
+                
+                btnCopyDay.addEventListener('click', () => {
+                    copiedDayPattern = { type: day.type, start: day.start, end: day.end };
+                    toast('Día copiado', 'success');
+                });
+
+                btnPasteDay.addEventListener('click', () => {
+                    if (!copiedDayPattern) {
+                        toast('Copia un día primero', 'warning');
+                        return;
+                    }
+                    day.type = copiedDayPattern.type;
+                    day.start = copiedDayPattern.start;
+                    day.end = copiedDayPattern.end;
+                    
+                    typeSelect.value = day.type;
+                    startInput.value = day.start;
+                    endInput.value = day.end;
+                    typeSelect.dispatchEvent(new Event('change'));
+                    toast('Día pegado', 'success');
+                });
+
+                dayActions.appendChild(btnCopyDay);
+                dayActions.appendChild(btnPasteDay);
 
                 row.appendChild(label);
                 row.appendChild(typeSelect);
                 row.appendChild(startInput);
                 row.appendChild(endInput);
+                row.appendChild(dayActions);
+                
+                // Pincel interaction intercept
+                row.addEventListener('click', (e) => {
+                    if (activeBrush) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const allBrushes = [...DEFAULT_BRUSHES, ...customBrushes];
+                        const brush = allBrushes.find(b => b.id === activeBrush);
+                        if (!brush) return;
+
+                        const isRed = day.dow === 0 || isHoliday(day.dayNum);
+
+                        if (brush.type === 'work') {
+                            if (day.type === 'lar') {
+                                // Mantiene tipo L.A.R., solo actualiza los horarios
+                                day.start = brush.start;
+                                day.end = brush.end;
+                            } else {
+                                day.type = 'work';
+                                day.start = brush.start;
+                                day.end = brush.end;
+                            }
+                        } else if (brush.type === 'lar') {
+                            day.type = 'lar';
+                            if (isRed) {
+                                day.start = '';
+                                day.end = '';
+                            } else {
+                                // Mantiene los horarios actuales si existen
+                                day.start = day.start || '07:00';
+                                day.end = day.end || '14:00';
+                            }
+                        } else {
+                            day.type = brush.type;
+                            day.start = brush.start;
+                            day.end = brush.end;
+                        }
+
+                        typeSelect.value = day.type;
+                        startInput.value = day.start;
+                        endInput.value = day.end;
+                        typeSelect.dispatchEvent(new Event('change'));
+
+                        // visual feedback
+                        row.style.transform = 'scale(0.95)';
+                        setTimeout(() => row.style.transform = 'none', 100);
+                    }
+                }, true); // Use capture phase so we intercept clicks on inputs too
+
                 grid.appendChild(row);
             });
 
@@ -652,7 +911,7 @@
 
             const totalHours = finalDays.reduce((sum, d) => sum + d.hours, 0);
             return {
-                name: emp.name || `Empleado ${emp.id}`,
+                name: emp.name,
                 targetHours: emp.hours,
                 totalHours,
                 diff: totalHours - emp.hours,
@@ -671,22 +930,51 @@
     }
 
     function calcHours(start, end) {
-        const [sh, sm] = start.split(':').map(Number);
-        const [eh, em] = end.split(':').map(Number);
-        let diff = (eh * 60 + em) - (sh * 60 + sm);
-        if (diff < 0) diff += 24 * 60; // overnight
-        return diff / 60;
+        if (!start || !end) return 0;
+        const [h1, m1] = start.split(':').map(Number);
+        const [h2, m2] = end.split(':').map(Number);
+        let diff = h2 - h1 + (m2 - m1) / 60;
+        if (diff < 0) diff += 24; // Crosses midnight
+        return diff;
+    }
+
+    function updateDayRowColor(row, type) {
+        row.classList.remove('type-work', 'type-franco', 'type-lar');
+        if (type === 'work') row.classList.add('type-work');
+        else if (type === 'franco') row.classList.add('type-franco');
+        else if (type === 'lar') row.classList.add('type-lar');
+    }
+
+    function recalcLiveHours(empId, card) {
+        const emp = employees.find(e => e.id === empId);
+        if (!emp || !card) return;
+        
+        let total = 0;
+        emp.days.forEach(d => {
+            if (d.type === 'lar' && (d.dow === 0 || isHoliday(d.dayNum))) return;
+            if (d.start && d.end && (d.type === 'work' || d.type === 'lar')) {
+                total += calcHours(d.start, d.end);
+            }
+        });
+        emp.totalHours = total;
+        emp.diff = total - emp.hours;
+
+        const liveEl = card.querySelector('.emp-hours-live');
+        if (liveEl) {
+            liveEl.textContent = `Realizadas: ${total} / ${emp.hours} hs`;
+            liveEl.classList.remove('overtime', 'exact-time');
+            if (total > emp.hours) {
+                liveEl.classList.add('overtime');
+            } else if (total === emp.hours) {
+                liveEl.classList.add('exact-time');
+            }
+        }
     }
 
     // ───── PREVIEW ─────
     function generateAndShowPreview() {
         if (employees.length === 0) {
             toast('Agrega al menos un empleado', 'warning');
-            return;
-        }
-        const emptyNames = employees.filter(e => !e.name.trim());
-        if (emptyNames.length > 0) {
-            toast('Completa el nombre de todos los empleados', 'warning');
             return;
         }
 
@@ -716,8 +1004,9 @@
 
         // Body
         let tbodyHtml = '';
-        emps.forEach((emp, idx) => {
-            tbodyHtml += `<tr class="emp-row-name"><td>${emp.name}</td>`;
+        emps.forEach((emp, i) => {
+            const displayName = emp.name;
+            tbodyHtml += `<tr class="emp-row-name"><td>${displayName}</td>`;
             emp.days.forEach(day => {
                 let cls = '', content = '';
                 if (day.type === 'work') {
@@ -748,7 +1037,7 @@
             });
             tbodyHtml += '<td></td></tr>';
 
-            if (idx < emps.length - 1) {
+            if (i < emps.length - 1) {
                 tbodyHtml += `<tr class="emp-separator"><td colspan="${daysInMonth + 2}"></td></tr>`;
             }
         });
@@ -825,25 +1114,33 @@
         const alignLeft = { horizontal: 'left', vertical: 'middle', wrapText: true };
 
         // Headers
-        mergeCells(1, 4, 1, 25); setCell(1, 4, department, { font: fontArial(12, true, '000000', 'single'), alignment: alignCenter });
-        mergeCells(1, 26, 1, 29); setCell(1, 26, 'M: Turno Mañana', { font: fontArial(10, true), alignment: alignLeft });
-        mergeCells(1, 30, 1, 32); setCell(1, 30, 'D: Descanso', { font: fontArial(10, false), alignment: alignLeft });
+        const lastCol = daysInMonth + 1;
+        const right1Start = lastCol - 2;
+        const right1End = lastCol;
+        const right2Start = lastCol - 6;
+        const right2End = lastCol - 3;
+        const leftStart = 4;
+        const leftEnd = lastCol - 7;
 
-        mergeCells(2, 4, 2, 25); setCell(2, 4, 'DISTRIBUCION DE TURNOS', { font: fontArial(10, false), alignment: alignCenter });
-        mergeCells(2, 26, 2, 29); setCell(2, 26, 'T: Turno Tarde', { font: fontArial(10, true), alignment: alignLeft });
-        mergeCells(2, 30, 2, 32); setCell(2, 30, 'A: Ausente', { font: fontArial(10, false), alignment: alignLeft });
+        mergeCells(1, leftStart, 1, leftEnd); setCell(1, leftStart, department, { font: fontArial(12, true, '000000', 'single'), alignment: alignCenter });
+        mergeCells(1, right2Start, 1, right2End); setCell(1, right2Start, 'M: Turno Mañana', { font: fontArial(10, true), alignment: alignLeft });
+        mergeCells(1, right1Start, 1, right1End); setCell(1, right1Start, 'D: Descanso', { font: fontArial(10, false), alignment: alignLeft });
+
+        mergeCells(2, leftStart, 2, leftEnd); setCell(2, leftStart, 'DISTRIBUCION DE TURNOS', { font: fontArial(10, false), alignment: alignCenter });
+        mergeCells(2, right2Start, 2, right2End); setCell(2, right2Start, 'T: Turno Tarde', { font: fontArial(10, true), alignment: alignLeft });
+        mergeCells(2, right1Start, 2, right1End); setCell(2, right1Start, 'A: Ausente', { font: fontArial(10, false), alignment: alignLeft });
 
         const defaultTarget = parseInt(DOM.targetHours.value) || 220;
-        mergeCells(3, 4, 3, 25); setCell(3, 4, `HORAS A TRABAJAR: ${defaultTarget} HS`, { font: fontArial(10, true), alignment: alignCenter });
-        mergeCells(3, 26, 3, 29); setCell(3, 26, 'F: Franco', { font: fontArial(10, true), alignment: alignLeft });
-        mergeCells(3, 30, 3, 32); setCell(3, 30, 'N: Turno noche', { font: fontArial(10, false), alignment: alignLeft });
+        mergeCells(3, leftStart, 3, leftEnd); setCell(3, leftStart, `HORAS A TRABAJAR: ${defaultTarget} HS`, { font: fontArial(10, true), alignment: alignCenter });
+        mergeCells(3, right2Start, 3, right2End); setCell(3, right2Start, 'F: Franco', { font: fontArial(10, true), alignment: alignLeft });
+        mergeCells(3, right1Start, 3, right1End); setCell(3, right1Start, 'N: Turno noche', { font: fontArial(10, false), alignment: alignLeft });
 
         // Row 4 & 5: Month and Year
         setCell(4, 1, MONTH_NAMES[month].toUpperCase(), { font: fontArial(12, true), alignment: alignCenter, border: borderAll });
         setCell(5, 1, year, { font: fontArial(12, true), alignment: alignCenter, border: borderAll });
 
         // Merge the empty space to the right into ONE large cell across both rows
-        mergeCells(4, 2, 5, 32);
+        mergeCells(4, 2, 5, lastCol);
         setCell(4, 2, '', { border: borderAll });
 
         for (let r = 1; r <= 5; r++) ws.getRow(r).height = 18;
@@ -854,7 +1151,7 @@
         // Add templates
         for (let t = 0; t < 2; t++) {
             allEmps.push({
-                name: '', targetHours: defaultTarget, totalHours: 0, diff: -defaultTarget,
+                id: 'New', name: '', targetHours: defaultTarget, totalHours: 0, diff: -defaultTarget,
                 days: Array.from({ length: daysInMonth }, (_, i) => ({
                     dayNum: i + 1, dow: new Date(year, month, i + 1).getDay(),
                     dowAbbr: DAY_ABBRS[new Date(year, month, i + 1).getDay()],
@@ -869,9 +1166,10 @@
             const r1 = currentRow, r2 = currentRow + 1, r3 = currentRow + 2, r4 = currentRow + 3, r5 = currentRow + 4;
             [16, 16, 22, 22, 16].forEach((h, i) => ws.getRow(currentRow + i).height = h);
 
-            mergeCells(r1, 1, r2, 1);
-            setCell(r1, 1, emp.name, { font: fontTNR(10, true), alignment: alignLeft, border: borderAll });
-            setCell(r3, 1, '', { border: borderAll });
+            // Name (Col 1, R1-R3)
+            const displayName = emp.name;
+            ws.mergeCells(r1, 1, r3, 1);
+            setCell(r1, 1, displayName, { font: fontTNR(10, true), alignment: alignLeft, border: borderAll });
             
             const hsText = emp.isEmpty ? `HS: ${emp.targetHours}   /T: 0 / D:${-emp.targetHours}` : `HS: ${emp.targetHours}   /T: ${emp.totalHours} / D:${emp.diff}`;
             setCell(r4, 1, hsText, { font: fontArial(7, true), alignment: alignLeft, border: borderAll });
@@ -937,8 +1235,8 @@
 
                 const cell = ws.getRow(r3).getCell(colStart);
                 cell.value = `L.A.R. ${runLen} DIAS`;
-                // If it's a very long string, reduce font size slightly
-                cell.font = { name: 'Arial', size: 8, bold: true, color: { argb: 'FF000000' } };
+                const fontSize = runLen >= 5 ? 16 : runLen === 4 ? 14 : runLen === 3 ? 12 : 8;
+                cell.font = { name: 'Arial', size: fontSize, bold: true, color: { argb: 'FF000000' } };
                 cell.alignment = alignCenter;
                 cell.border = borderAll;
                 for (let i = d; i <= runEnd; i++) processed[i] = true;
@@ -948,7 +1246,7 @@
                 ws.mergeCells(r3, col, r4, col);
                 const cell = ws.getRow(r3).getCell(col);
                 cell.value = label;
-                cell.font = fontArial(9);
+                cell.font = fontArial(16);
                 cell.alignment = alignCenter;
                 cell.border = borderAll;
                 processed[d] = true;
@@ -969,9 +1267,8 @@
                     ws.mergeCells(r3, colStart, r4, colEnd);
                     const cell = ws.getRow(r3).getCell(colStart);
                     cell.value = `${day.start} A ${day.end}`;
-                    // Important: When merged horizontally, if SOME days are red, Excel only allows one font color per cell.
-                    // We'll use the starting day's color for simplicity, or black by default.
-                    cell.font = { name: 'Arial', size: 8, bold: true, color: { argb: 'FF000000' } };
+                    const fontSize = runLen >= 5 ? 16 : runLen === 4 ? 14 : runLen === 3 ? 12 : 8;
+                    cell.font = { name: 'Arial', size: fontSize, bold: true, color: { argb: 'FF000000' } };
                     cell.alignment = alignCenter;
                     cell.border = borderAll;
                     for (let i = d; i <= runEnd; i++) processed[i] = true;
