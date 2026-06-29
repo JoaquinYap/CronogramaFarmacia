@@ -47,18 +47,42 @@
     let activeBrush = null;
     let customBrushes = [];
     const DEFAULT_BRUSHES = [
-        { id: 'b1', label: '7-11', type: 'work', start: '07:00', end: '11:00' },
-        { id: 'b2', label: '7-14', type: 'work', start: '07:00', end: '14:00' },
-        { id: 'b3', label: '7-15', type: 'work', start: '07:00', end: '15:00' },
-        { id: 'b4', label: '7-17', type: 'work', start: '07:00', end: '17:00' },
-        { id: 'b5', label: '8-13', type: 'work', start: '08:00', end: '13:00' },
-        { id: 'b6', label: '9-14', type: 'work', start: '09:00', end: '14:00' },
+        { id: 'b1', label: '7 A 11', type: 'work', start: '07:00', end: '11:00' },
+        { id: 'b2', label: '7 A 14', type: 'work', start: '07:00', end: '14:00' },
+        { id: 'b3', label: '7 A 15', type: 'work', start: '07:00', end: '15:00' },
+        { id: 'b4', label: '7 A 17', type: 'work', start: '07:00', end: '17:00' },
+        { id: 'b5', label: '8 A 13', type: 'work', start: '08:00', end: '13:00' },
+        { id: 'b6', label: '9 A 14', type: 'work', start: '09:00', end: '14:00' },
         { id: 'f', label: 'Franco', type: 'franco', start: '', end: '' },
         { id: 'l', label: 'L.A.R.', type: 'lar', start: '', end: '' }
     ];
 
     // Theme state
     let currentTheme = localStorage.getItem('cronoexcel_theme') || 'dark';
+
+    // ───── FIREBASE INITIALIZATION ─────
+    const firebaseConfig = {
+      apiKey: "AIzaSyB9XkyoLpR3hFXHMK0iNfZbPf08uPZUSxo",
+      authDomain: "cronoexcel.firebaseapp.com",
+      projectId: "cronoexcel",
+      storageBucket: "cronoexcel.firebasestorage.app",
+      messagingSenderId: "685488390321",
+      appId: "1:685488390321:web:fa3f683facfcb263d52290",
+      measurementId: "G-JVB70X4LNQ"
+    };
+    
+    let auth;
+    let db;
+    let currentUser = null;
+
+    let currentLoadedScheduleName = null;
+
+    if (typeof firebase !== 'undefined') {
+        firebase.initializeApp(firebaseConfig);
+        auth = firebase.auth();
+        db = firebase.firestore();
+        db.enablePersistence().catch(err => console.warn('Offline persistence not enabled', err));
+    }
 
     // ───── DOM REFS ─────
     const $ = (sel) => document.querySelector(sel);
@@ -78,6 +102,8 @@
         previewTbody: $('#preview-tbody'),
         previewMonthYear: $('#preview-month-year'),
         previewEmpCount: $('#preview-emp-count'),
+        sectionAuthWall: $('#section-auth-wall'),
+        stepsIndicator: $('.steps-indicator'),
         sectionConfig: $('#section-config'),
         sectionEmployees: $('#section-employees'),
         sectionPreview: $('#section-preview'),
@@ -85,13 +111,101 @@
         brushToolbar: $('#brush-toolbar'),
         brushList: $('#brush-list'),
         btnCloseBrush: $('#btn-close-brush'),
+        btnUndo: $('#btn-undo'),
+        btnRedo: $('#btn-redo'),
+        btnDirectory: $('#btn-directory'),
+        directoryModal: $('#directory-modal'),
+        btnCloseDirectory: $('#btn-close-directory'),
+        directoryList: $('#directory-list'),
+        btnImportDirectory: $('#btn-import-directory'),
+        dashBalance: $('#dash-balance'),
+        dashExtras: $('#dash-extras'),
+        dashDebtors: $('#dash-debtors'),
+        brushFab: $('#brush-fab')
     };
+
+    // ───── HISTORY STATE (UNDO/REDO) ─────
+    let undoStack = [];
+    let redoStack = [];
+
+    function renderEmployees() {
+        DOM.employeesContainer.innerHTML = '';
+        employeeIdCounter = 0;
+        const saved = employees.slice();
+        employees = [];
+        saved.forEach(emp => {
+            addEmployee(emp, true);
+        });
+    }
+
+    function saveHistoryState() {
+        if (!employees) return;
+        undoStack.push(JSON.parse(JSON.stringify(employees)));
+        redoStack = [];
+        updateUndoRedoButtons();
+    }
+
+    function undo() {
+        if (undoStack.length === 0) return;
+        redoStack.push(JSON.parse(JSON.stringify(employees)));
+        employees = undoStack.pop();
+        renderEmployees();
+        updateUndoRedoButtons();
+        toast('Acción deshecha', 'info');
+    }
+
+    function redo() {
+        if (redoStack.length === 0) return;
+        undoStack.push(JSON.parse(JSON.stringify(employees)));
+        employees = redoStack.pop();
+        renderEmployees();
+        updateUndoRedoButtons();
+        toast('Acción rehecha', 'info');
+    }
+
+    function updateUndoRedoButtons() {
+        if (DOM.btnUndo) DOM.btnUndo.disabled = undoStack.length === 0;
+        if (DOM.btnRedo) DOM.btnRedo.disabled = redoStack.length === 0;
+    }
+
+    function confirmAction(title, msg, confirmText = 'Confirmar', isDanger = true) {
+        return new Promise(resolve => {
+            const modal = $('#action-confirm-modal');
+            const titleEl = $('#action-confirm-title');
+            const msgEl = $('#action-confirm-msg');
+            const btnCancel = $('#btn-cancel-action');
+            const btnConfirm = $('#btn-confirm-action');
+
+            titleEl.textContent = title;
+            msgEl.textContent = msg;
+            btnConfirm.textContent = confirmText;
+
+            titleEl.style.color = isDanger ? 'var(--accent-danger)' : 'var(--text-primary)';
+            btnConfirm.style.background = isDanger ? 'var(--accent-danger)' : 'var(--accent-primary)';
+            btnConfirm.style.borderColor = isDanger ? 'var(--accent-danger)' : 'var(--accent-primary)';
+
+            modal.style.display = 'flex';
+
+            const onCancel = () => { cleanup(); resolve(false); };
+            const onConfirm = () => { cleanup(); resolve(true); };
+
+            function cleanup() {
+                modal.style.display = 'none';
+                btnCancel.removeEventListener('click', onCancel);
+                btnConfirm.removeEventListener('click', onConfirm);
+            }
+
+            btnCancel.addEventListener('click', onCancel);
+            btnConfirm.addEventListener('click', onConfirm);
+        });
+    }
 
     // ───── INIT ─────
     function init() {
         applyTheme(currentTheme);
         populateMonthSelect();
         bindEvents();
+        initAuth();
         
         // Intenta cargar configuracion antigua de localstorage si existiera
         loadFromStorageLegacy();
@@ -133,9 +247,9 @@
             if (!end) return;
             const id = 'c' + Date.now();
             // simple parse to format label e.g., 06-13
-            const sl = start.split(':')[0];
-            const el = end.split(':')[0];
-            customBrushes.push({ id, label: `${sl}-${el}`, type: 'work', start, end });
+            const sl = parseInt(start.split(':')[0], 10);
+            const el = parseInt(end.split(':')[0], 10);
+            customBrushes.push({ id, label: `${sl} A ${el}`, type: 'work', start, end });
             activeBrush = id;
             document.body.classList.toggle('brush-active', true);
             renderBrushToolbar();
@@ -336,6 +450,42 @@
             $('#new-holiday-day').value = '';
             $('#new-holiday-name').value = '';
         });
+        
+        // Undo / Redo / Directory bindings
+        if(DOM.btnUndo) DOM.btnUndo.addEventListener('click', undo);
+        if(DOM.btnRedo) DOM.btnRedo.addEventListener('click', redo);
+        if(DOM.btnDirectory) DOM.btnDirectory.addEventListener('click', openDirectoryModal);
+        if(DOM.btnCloseDirectory) DOM.btnCloseDirectory.addEventListener('click', () => DOM.directoryModal.style.display = 'none');
+        if(DOM.btnImportDirectory) DOM.btnImportDirectory.addEventListener('click', importFromDirectory);
+        
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
+            if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+        });
+
+        // Initialize SortableJS
+        if (typeof Sortable !== 'undefined' && DOM.employeesContainer) {
+            new Sortable(DOM.employeesContainer, {
+                handle: '.employee-drag-handle',
+                animation: 150,
+                onEnd: function (evt) {
+                    saveHistoryState();
+                    const item = employees.splice(evt.oldIndex, 1)[0];
+                    employees.splice(evt.newIndex, 0, item);
+                    renumberEmployees();
+                }
+            });
+        }
+
+        $('#btn-open-auth-modal').addEventListener('click', () => {
+            $('#auth-modal').style.display = 'flex';
+            $('#auth-email').value = '';
+            $('#auth-password').value = '';
+        });
+        
+        $('#btn-close-auth').addEventListener('click', () => {
+            $('#auth-modal').style.display = 'none';
+        });
 
         $('#btn-confirm-holiday').addEventListener('click', () => {
             const maxDays = getDaysInMonth(parseInt(DOM.yearInput.value), parseInt(DOM.monthSelect.value));
@@ -385,8 +535,9 @@
             toast('Empleado agregado', 'success');
         });
         $('#btn-export-excel').addEventListener('click', exportToExcel);
-        $('#btn-save-config').addEventListener('click', saveToFile);
-        $('#btn-load-config').addEventListener('click', loadFromFile);
+        $('#btn-share-whatsapp').addEventListener('click', sharePDF);
+        $('#btn-save-config').addEventListener('click', saveConfigToCloud);
+        $('#btn-load-config').addEventListener('click', loadConfigFromCloud);
 
         $$('.step').forEach(s => {
             s.addEventListener('click', () => {
@@ -402,7 +553,123 @@
         });
     }
 
+    function initAuth() {
+        if (!auth) return;
+        
+        auth.onAuthStateChanged(user => {
+            currentUser = user;
+            if (user) {
+                $('#user-info').style.display = 'flex';
+                $('#btn-auth').style.display = 'none';
+                $('#auth-username-display').textContent = user.displayName || user.email;
+                $('#auth-modal').style.display = 'none';
+                navigateTo(1);
+            } else {
+                $('#user-info').style.display = 'none';
+                $('#btn-auth').style.display = 'flex';
+                navigateTo(0);
+            }
+        });
+
+        $('#btn-auth').addEventListener('click', () => {
+            $('#auth-modal').style.display = 'flex';
+            $('#auth-email').value = '';
+            $('#auth-password').value = '';
+        });
+
+        $('#btn-logout').addEventListener('click', () => {
+            if (currentUser) {
+                auth.signOut();
+                toast('Sesión cerrada');
+                employees = [];
+                DOM.employeesContainer.innerHTML = '';
+            }
+        });
+
+        let isLoginMode = true;
+        $('#btn-toggle-auth-mode').addEventListener('click', (e) => {
+            e.preventDefault();
+            isLoginMode = !isLoginMode;
+            $('#auth-title').textContent = isLoginMode ? 'Iniciar Sesión' : 'Registrarse';
+            $('#auth-submit-btn').textContent = isLoginMode ? 'Ingresar' : 'Registrarse';
+            $('#auth-toggle-text').textContent = isLoginMode ? '¿No tienes cuenta?' : '¿Ya tienes cuenta?';
+            $('#btn-toggle-auth-mode').textContent = isLoginMode ? 'Regístrate' : 'Inicia Sesión';
+            $('#auth-username-group').style.display = isLoginMode ? 'none' : 'block';
+        });
+
+        $('#btn-toggle-password').addEventListener('click', () => {
+            const pwdInput = $('#auth-password');
+            const iconEye = $('#icon-eye');
+            if (pwdInput.type === 'password') {
+                pwdInput.type = 'text';
+                iconEye.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+            } else {
+                pwdInput.type = 'password';
+                iconEye.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+            }
+        });
+
+        $('#btn-forgot-password').addEventListener('click', (e) => {
+            e.preventDefault();
+            const email = $('#auth-email').value;
+            if (!email) {
+                toast('Ingresa tu email arriba para restablecer la contraseña', 'warning');
+                return;
+            }
+            auth.sendPasswordResetEmail(email)
+                .then(() => toast('Correo de restablecimiento enviado a ' + email, 'success'))
+                .catch(err => toast(err.message, 'error'));
+        });
+
+        $('#auth-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const email = $('#auth-email').value;
+            const pass = $('#auth-password').value;
+            const username = $('#auth-username').value;
+            const btn = $('#auth-submit-btn');
+            
+            btn.innerHTML = `<span class="spinner" style="margin-right: 8px;"></span> ${isLoginMode ? 'Ingresando...' : 'Registrando...'}`;
+            btn.disabled = true;
+            
+            if (isLoginMode) {
+                auth.signInWithEmailAndPassword(email, pass)
+                    .then(() => toast('Sesión iniciada', 'success'))
+                    .catch(err => toast(err.message, 'error'))
+                    .finally(() => {
+                        btn.innerHTML = 'Ingresar';
+                        btn.disabled = false;
+                    });
+            } else {
+                auth.createUserWithEmailAndPassword(email, pass)
+                    .then((userCredential) => {
+                        return userCredential.user.updateProfile({
+                            displayName: username || email.split('@')[0]
+                        }).then(() => {
+                            $('#auth-username-display').textContent = userCredential.user.displayName;
+                            toast('Cuenta creada correctamente', 'success');
+                        });
+                    })
+                    .catch(err => toast(err.message, 'error'))
+                    .finally(() => {
+                        btn.innerHTML = 'Registrarse';
+                        btn.disabled = false;
+                    });
+            }
+        });
+    }
+
     function navigateTo(step) {
+        if (step === 0) {
+            DOM.sectionAuthWall.classList.remove('hidden');
+            DOM.stepsIndicator.style.display = 'none';
+            DOM.sectionConfig.classList.add('hidden');
+            DOM.sectionEmployees.classList.add('hidden');
+            DOM.sectionPreview.classList.add('hidden');
+            return;
+        }
+
+        DOM.sectionAuthWall.classList.add('hidden');
+        DOM.stepsIndicator.style.display = 'flex';
         DOM.sectionConfig.classList.toggle('hidden', step !== 1);
         DOM.sectionEmployees.classList.toggle('hidden', step !== 2);
         DOM.sectionPreview.classList.toggle('hidden', step !== 3 && step !== 4);
@@ -425,9 +692,16 @@
         
         // Show brush toolbar only in Employees view
         if (activeStep === 2) {
-            DOM.brushToolbar.classList.remove('hidden');
+            if (activeBrush || (DOM.brushToolbar && !DOM.brushToolbar.classList.contains('hidden'))) {
+                if (DOM.brushToolbar) DOM.brushToolbar.classList.remove('hidden');
+                if (DOM.brushFab) DOM.brushFab.classList.add('hidden');
+            } else {
+                if (DOM.brushToolbar) DOM.brushToolbar.classList.add('hidden');
+                if (DOM.brushFab) DOM.brushFab.classList.remove('hidden');
+            }
         } else {
-            DOM.brushToolbar.classList.add('hidden');
+            if (DOM.brushToolbar) DOM.brushToolbar.classList.add('hidden');
+            if (DOM.brushFab) DOM.brushFab.classList.add('hidden');
         }
     }
 
@@ -444,7 +718,8 @@
     }
 
     // ───── EMPLOYEE MANAGEMENT ─────
-    function addEmployee(data) {
+    function addEmployee(data, noSave = false) {
+        if (!noSave) saveHistoryState();
         const id = ++employeeIdCounter;
         const emp = {
             id,
@@ -463,6 +738,7 @@
     }
 
     function removeEmployee(id) {
+        saveHistoryState();
         employees = employees.filter(e => e.id !== id);
         const card = $(`.employee-card[data-employee-id="${id}"]`);
         if (card) {
@@ -499,6 +775,7 @@
         });
 
         card.querySelector('.btn-duplicate-employee').addEventListener('click', () => {
+        saveHistoryState();
             const clonedDays = emp.days.map(d => ({ ...d }));
             addEmployee({
                 name: emp.name ? emp.name + ' (Copia)' : '',
@@ -512,37 +789,19 @@
             toast('Empleado duplicado', 'success');
         });
 
-        card.querySelector('.btn-delete-employee').addEventListener('click', () => {
+        card.querySelector('.btn-delete-employee').addEventListener('click', async () => {
             if (employees.length <= 1) {
                 toast('Debe haber al menos un empleado', 'warning');
                 return;
             }
             
-            const modal = $('#delete-confirm-modal');
-            const msg = $('#delete-confirm-msg');
-            const btnConfirm = $('#btn-confirm-delete');
-            const btnCancel = $('#btn-cancel-delete');
-            
             const empName = emp.name || `Empleado ${emp.id}`;
-            msg.textContent = `¿Estás seguro de que querés eliminar a ${empName}? Se perderán todos sus horarios.`;
-            modal.style.display = 'flex';
+            const confirmed = await confirmAction('Eliminar Empleado', `¿Estás seguro de que querés eliminar a ${empName}? Se perderán todos sus horarios.`, 'Sí, Eliminar', true);
             
-            const cleanup = () => {
-                modal.style.display = 'none';
-                btnConfirm.removeEventListener('click', onConfirm);
-                btnCancel.removeEventListener('click', onCancel);
-            };
-            
-            const onConfirm = () => {
+            if (confirmed) {
                 removeEmployee(emp.id);
                 toast('Empleado eliminado', 'info');
-                cleanup();
-            };
-            
-            const onCancel = () => cleanup();
-            
-            btnConfirm.addEventListener('click', onConfirm);
-            btnCancel.addEventListener('click', onCancel);
+            }
         });
 
         const body = card.querySelector('.employee-card-body');
@@ -689,6 +948,7 @@
 
             // Paste logic
             header.querySelector('.btn-paste-week').addEventListener('click', () => {
+                saveHistoryState();
                 if (!copiedPattern) {
                     toast('Copia una semana primero', 'warning');
                     return;
@@ -802,6 +1062,7 @@
                 });
 
                 btnPasteDay.addEventListener('click', () => {
+                    saveHistoryState();
                     if (!copiedDayPattern) {
                         toast('Copia un día primero', 'warning');
                         return;
@@ -829,6 +1090,7 @@
                 // Pincel interaction intercept
                 row.addEventListener('click', (e) => {
                     if (activeBrush) {
+                        saveHistoryState();
                         e.preventDefault();
                         e.stopPropagation();
                         const allBrushes = [...DEFAULT_BRUSHES, ...customBrushes];
@@ -973,15 +1235,21 @@
 
     // ───── PREVIEW ─────
     function generateAndShowPreview() {
-        if (employees.length === 0) {
-            toast('Agrega al menos un empleado', 'warning');
-            return;
-        }
+        try {
+            generateDashboard();
+            if (employees.length === 0) {
+                toast('Agrega al menos un empleado', 'warning');
+                return;
+            }
 
-        const schedule = generateSchedule();
-        renderPreview(schedule);
-        navigateTo(3);
-        toast('Cronograma generado correctamente', 'success');
+            const schedule = generateSchedule();
+            renderPreview(schedule);
+            navigateTo(3);
+            toast('Cronograma generado correctamente', 'success');
+        } catch (error) {
+            console.error(error);
+            toast('Error al generar: ' + error.message, 'error');
+        }
     }
 
     function renderPreview(schedule) {
@@ -1043,6 +1311,199 @@
         });
 
         DOM.previewTbody.innerHTML = tbodyHtml;
+    }
+
+    async function sharePDF() {
+        if (!generatedSchedule) {
+            toast('Primero genera la vista previa', 'warning');
+            return;
+        }
+
+        const btn = $('#btn-share-whatsapp');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = `<span class="spinner" style="margin-right: 8px;"></span> Generando PDF...`;
+        btn.disabled = true;
+
+        try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', format: 'legal' });
+            
+            const { month, year, department, daysInMonth, employees: emps } = generatedSchedule;
+            const depStr = currentLoadedScheduleName ? currentLoadedScheduleName : (department ? department.toUpperCase().trim() : 'DEPOSITO');
+            const title = `CRONOGRAMA ${depStr} ${MONTH_NAMES[month].toUpperCase()} ${year}`;
+            
+            const body = [];
+            const lastCol = daysInMonth + 1;
+            const defaultTarget = parseInt(DOM.targetHours.value) || 220;
+
+            const getRed = (isRed) => isRed ? [255, 0, 0] : [0, 0, 0];
+
+            const r1 = [];
+            r1.push({ content: department, colSpan: lastCol - 7, styles: { halign: 'center', fontStyle: 'bold', fontSize: 10 } });
+            r1.push({ content: 'M: Turno Mañana', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
+            r1.push({ content: 'D: Descanso', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
+            body.push(r1);
+
+            const r2 = [];
+            r2.push({ content: 'DISTRIBUCION DE TURNOS', colSpan: lastCol - 7, styles: { halign: 'center', fontSize: 8 } });
+            r2.push({ content: 'T: Turno Tarde', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
+            r2.push({ content: 'A: Ausente', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
+            body.push(r2);
+
+            const r3 = [];
+            r3.push({ content: `HORAS A TRABAJAR: ${defaultTarget} HS`, colSpan: lastCol - 7, styles: { halign: 'center', fontStyle: 'bold', fontSize: 8 } });
+            r3.push({ content: 'F: Franco', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
+            r3.push({ content: 'N: Turno noche', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
+            body.push(r3);
+
+            const r4 = [];
+            r4.push({ content: MONTH_NAMES[month].toUpperCase(), styles: { halign: 'center', fontStyle: 'bold', fontSize: 10 } });
+            r4.push({ content: '', colSpan: lastCol - 1, rowSpan: 2 });
+            body.push(r4);
+
+            const r5 = [];
+            r5.push({ content: year.toString(), styles: { halign: 'center', fontStyle: 'bold', fontSize: 10 } });
+            body.push(r5);
+
+            const allEmps = [...emps];
+            for (let t = 0; t < 2; t++) {
+                allEmps.push({
+                    id: 'New', name: '', targetHours: defaultTarget, totalHours: 0, diff: -defaultTarget,
+                    days: Array.from({ length: daysInMonth }, (_, i) => ({
+                        dayNum: i + 1, dow: new Date(year, month, i + 1).getDay(),
+                        dowAbbr: DAY_ABBRS[new Date(year, month, i + 1).getDay()],
+                        type: '', start: '', end: '', hours: 0,
+                        isRed: new Date(year, month, i + 1).getDay() === 0 || isHoliday(i+1)
+                    })),
+                    isEmpty: true,
+                });
+            }
+
+            for (const emp of allEmps) {
+                const er1 = [];
+                er1.push({ content: emp.name, rowSpan: 3, styles: { halign: 'left', valign: 'middle', fontStyle: 'bold', fontSize: 8 } });
+                for (let d = 0; d < daysInMonth; d++) {
+                    const day = emp.days[d];
+                    er1.push({ content: day.dowAbbr, styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor: getRed(day.isRed) } });
+                }
+                body.push(er1);
+
+                const er2 = [];
+                for (let d = 0; d < daysInMonth; d++) {
+                    const day = emp.days[d];
+                    er2.push({ content: day.dayNum.toString(), styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor: getRed(day.isRed) } });
+                }
+                body.push(er2);
+
+                const er3 = [];
+                const er4 = [];
+                
+                const hsText = emp.isEmpty ? `HS: ${emp.targetHours}   /T: 0 / D:${-emp.targetHours}` : `HS: ${emp.targetHours}   /T: ${emp.totalHours} / D:${emp.diff}`;
+                er4.push({ content: hsText, styles: { halign: 'left', fontSize: 5, fontStyle: 'bold' } });
+                
+                let d = 0;
+                while (d < daysInMonth) {
+                    if (emp.isEmpty) {
+                        er3.push({ content: '', styles: {} });
+                        er4.push({ content: '', styles: {} });
+                        d++;
+                        continue;
+                    }
+
+                    const day = emp.days[d];
+                    const textColor = getRed(day.isRed);
+                    
+                    if (day.type === 'lar') {
+                        let runEnd = d;
+                        while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'lar') runEnd++;
+                        const runLen = runEnd - d + 1;
+                        
+                        er3.push({ content: `L.A.R. ${runLen} DIAS`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 10 : 6, textColor: [0,0,0] } });
+                        d = runEnd + 1;
+                    } else if (day.type !== 'work') {
+                        const label = day.type === 'franco' ? 'F' : day.type === 'descanso' ? 'D' : 'A';
+                        er3.push({ content: label, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 10, textColor } });
+                        d++;
+                    } else {
+                        let runEnd = d;
+                        while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'work' && emp.days[runEnd + 1].start === day.start && emp.days[runEnd + 1].end === day.end) runEnd++;
+                        const runLen = runEnd - d + 1;
+
+                        if (runLen >= 3) {
+                            er3.push({ content: `${day.start} A ${day.end}`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 8 : 6, textColor: [0,0,0] } });
+                            d = runEnd + 1;
+                        } else {
+                            for (let i = d; i <= runEnd; i++) {
+                                const cColor = getRed(emp.days[i].isRed);
+                                er3.push({ content: emp.days[i].start, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
+                                er4.push({ content: emp.days[i].end, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
+                            }
+                            d = runEnd + 1;
+                        }
+                    }
+                }
+                body.push(er3);
+                body.push(er4);
+
+                const er5 = [];
+                er5.push({ content: emp.totalHours || '', styles: { halign: 'center', fontStyle: 'bold', fontSize: 6 } });
+                for (let d = 0; d < daysInMonth; d++) {
+                    const day = emp.days[d];
+                    const textColor = getRed(day.isRed);
+                    er5.push({ content: day.hours > 0 ? day.hours.toString() : '', styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor } });
+                }
+                
+                er5.forEach(c => {
+                    if(!c.styles) c.styles = {};
+                    c.styles.lineWidth = { top: 0.1, right: 0.1, left: 0.1, bottom: 0.3 };
+                });
+                body.push(er5);
+            }
+
+            doc.autoTable({
+                body: body,
+                startY: 10,
+                theme: 'grid',
+                styles: { cellPadding: 1, lineColor: [0, 0, 0], lineWidth: 0.1, font: 'helvetica' },
+                columnStyles: {
+                    0: { cellWidth: 50 }
+                },
+                margin: { top: 10, right: 10, bottom: 10, left: 10 }
+            });
+
+            const fileName = `${title}.pdf`;
+            const pdfBlob = doc.output('blob');
+            const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                try {
+                    await navigator.share({
+                        files: [file],
+                        title: fileName,
+                        text: 'Te comparto el cronograma en formato PDF'
+                    });
+                    toast('Abriendo menú para compartir...', 'success');
+                } catch(err) {
+                    fallbackShare(doc, fileName);
+                }
+            } else {
+                fallbackShare(doc, fileName);
+            }
+        } catch (err) {
+            console.error(err);
+            toast('Error al generar PDF: ' + err.message, 'error');
+        } finally {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    }
+
+    function fallbackShare(doc, fileName) {
+        doc.save(fileName);
+        toast('El PDF se descargó. Se abrirá WhatsApp Web para que lo envíes.', 'info');
+        setTimeout(() => {
+            window.open('https://web.whatsapp.com/send?text=Te%20env%C3%ADo%20el%20cronograma%20descargado', '_blank');
+        }, 2000);
     }
 
     // ───── EXCEL EXPORT ─────
@@ -1119,7 +1580,7 @@
         const right1End = lastCol;
         const right2Start = lastCol - 6;
         const right2End = lastCol - 3;
-        const leftStart = 4;
+        const leftStart = 1;
         const leftEnd = lastCol - 7;
 
         mergeCells(1, leftStart, 1, leftEnd); setCell(1, leftStart, department, { font: fontArial(12, true, '000000', 'single'), alignment: alignCenter });
@@ -1201,8 +1662,8 @@
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const depStr = department ? department.toUpperCase().trim() : 'DEPOSITO';
-        a.download = `CRONOGRAMA ${depStr} ${MONTH_NAMES[month].toUpperCase()} ${year}.xlsx`;
+        const depStr = currentLoadedScheduleName ? currentLoadedScheduleName : (department ? department.toUpperCase().trim() : 'DEPOSITO');
+        a.download = `CRONOGRAMA ${depStr}.xlsx`;
         a.click();
         window.URL.revokeObjectURL(url);
     }
@@ -1322,9 +1783,147 @@
             }
         } catch (err) {}
     }
-    function saveToFile() {
+    async function saveConfigToCloud() {
+        if (!currentUser) {
+            toast('Debes iniciar sesión para guardar en la nube', 'warning');
+            return;
+        }
+        $('#save-name').value = `Cronograma ${DOM.departmentName.value || ''}`.trim();
+        $('#save-modal').style.display = 'flex';
+    }
+
+    async function loadConfigFromCloud() {
+        if (!currentUser) {
+            toast('Debes iniciar sesión para cargar datos de la nube', 'warning');
+            return;
+        }
+        $('#load-modal').style.display = 'flex';
+        const container = $('#load-list-container');
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">Cargando...</div>';
+        
         try {
+            const snapshot = await db.collection('users').doc(currentUser.uid).collection('schedules').orderBy('updatedAt', 'desc').get();
+            if (snapshot.empty) {
+                container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">No tienes cronogramas guardados.</div>';
+                return;
+            }
+            container.innerHTML = '';
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                const div = document.createElement('div');
+                div.style.display = 'flex';
+                div.style.justifyContent = 'space-between';
+                div.style.alignItems = 'center';
+                div.style.padding = '12px';
+                div.style.background = 'rgba(0,0,0,0.2)';
+                div.style.borderRadius = '8px';
+                
+                const info = document.createElement('div');
+                info.style.display = 'flex';
+                info.style.flexDirection = 'column';
+                info.style.gap = '4px';
+                info.innerHTML = `<span style="font-weight:bold;">${data.name}</span><span style="font-size:0.8rem; color:var(--text-muted);">${data.updatedAt ? data.updatedAt.toDate().toLocaleString() : ''}</span>`;
+                
+                const actions = document.createElement('div');
+                actions.style.display = 'flex';
+                actions.style.gap = '8px';
+                
+                const btnLoad = document.createElement('button');
+                btnLoad.className = 'btn btn-primary btn-sm';
+                btnLoad.textContent = 'Cargar';
+                btnLoad.onclick = () => { applyLoadedData(data); $('#load-modal').style.display = 'none'; };
+                
+                const btnDel = document.createElement('button');
+                btnDel.className = 'btn btn-icon';
+                btnDel.style.color = 'var(--accent-danger)';
+                btnDel.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>';
+                btnDel.onclick = async () => {
+                    const confirmed = await confirmAction('Eliminar Cronograma', `¿Seguro que deseas eliminar "${data.name}"?`, 'Sí, Eliminar', true);
+                    if(confirmed) {
+                        await db.collection('users').doc(currentUser.uid).collection('schedules').doc(doc.id).delete();
+                        div.remove();
+                        toast('Eliminado correctamente', 'success');
+                    }
+                };
+                
+                actions.appendChild(btnLoad);
+                actions.appendChild(btnDel);
+                div.appendChild(info);
+                div.appendChild(actions);
+                container.appendChild(div);
+            });
+        } catch (err) {
+            container.innerHTML = '<div style="text-align: center; color: var(--accent-danger); padding: 20px;">Error al cargar</div>';
+            toast('Error al cargar', 'error');
+        }
+    }
+
+    function applyLoadedData(data) {
+        currentLoadedScheduleName = data.name;
+        DOM.departmentName.value = data.department || '';
+        DOM.monthSelect.value = data.month || 0;
+        DOM.yearInput.value = data.year || 2026;
+        DOM.targetHours.value = data.targetHours || 220;
+
+        refreshHolidays();
+        if (data.holidays && Array.isArray(data.holidays)) {
+            data.holidays.forEach(h => currentHolidays.push(h));
+            currentHolidays.sort((a,b) => a.day - b.day);
+            renderHolidays();
+        }
+
+        if (data.employees && data.employees.length > 0) {
+            employees = [];
+            employeeIdCounter = 0;
+            DOM.employeesContainer.innerHTML = '';
+            data.employees.forEach(e => addEmployee(e));
+        }
+        toast('Configuración cargada', 'success');
+    }
+
+    // Listeners para los modales de guardado y carga
+    $('#btn-close-save').addEventListener('click', () => $('#save-modal').style.display = 'none');
+    $('#btn-close-load').addEventListener('click', () => $('#load-modal').style.display = 'none');
+    
+    $('#save-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = $('#save-name').value.trim();
+        if(!name) return;
+
+        if (employees.length === 0) {
+            toast('El cronograma está vacío, agrega empleados primero', 'warning');
+            return;
+        }
+        
+        const btn = $('#btn-confirm-save');
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner" style="margin-right: 8px;"></span> Guardando...`;
+        
+        try {
+            // Check if name already exists case-insensitively
+            const allSchedules = await db.collection('users').doc(currentUser.uid).collection('schedules').get();
+            let targetDocId = null;
+            let existingName = null;
+            
+            allSchedules.forEach(doc => {
+                const data = doc.data();
+                if (data.name && data.name.toLowerCase() === name.toLowerCase()) {
+                    targetDocId = doc.id;
+                    existingName = data.name;
+                }
+            });
+
+            if (targetDocId) {
+                const overwrite = await confirmAction('Sobrescribir archivo', `Ya existe un cronograma llamado "${existingName}". ¿Deseas sobrescribirlo?`, 'Sí, sobrescribir', false);
+                if (!overwrite) {
+                    btn.disabled = false;
+                    btn.textContent = 'Guardar en la nube';
+                    return;
+                }
+            }
+
             const data = {
+                name: name,
                 department: DOM.departmentName.value,
                 month: DOM.monthSelect.value,
                 year: DOM.yearInput.value,
@@ -1336,58 +1935,162 @@
                     larHoursPerDay: e.larHoursPerDay,
                     days: e.days
                 })),
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
             };
-            const str = JSON.stringify(data, null, 2);
-            const blob = new Blob([str], { type: 'application/json' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `Backup_${MONTH_NAMES[data.month]}_${data.year}.json`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-            toast('Backup descargado', 'success');
+            
+            if (targetDocId) {
+                await db.collection('users').doc(currentUser.uid).collection('schedules').doc(targetDocId).update(data);
+            } else {
+                await db.collection('users').doc(currentUser.uid).collection('schedules').add(data);
+            }
+            
+            currentLoadedScheduleName = name;
+            toast('Configuración guardada en la nube', 'success');
+            saveDirectoryToFirebase();
+            $('#save-modal').style.display = 'none';
         } catch (err) {
-            toast('Error al descargar', 'error');
+            console.error(err);
+            toast('Error al guardar', 'error');
+        }
+        btn.disabled = false;
+        btn.innerHTML = 'Guardar en la nube';
+    });
+
+    // ───── DASHBOARD ─────
+    function generateDashboard() {
+        try {
+            if (!DOM.dashBalance || !DOM.dashExtras || !DOM.dashDebtors) return;
+            
+            let totalTarget = 0;
+            let totalScheduled = 0;
+            let balances = [];
+
+            (employees || []).forEach(emp => {
+                const target = emp.hours || 0;
+                let scheduled = 0;
+                (emp.days || []).forEach(d => {
+                    if (d.type === 'work' || d.type === 'lar') {
+                        if (d.start && typeof d.start === 'string' && d.start.includes(':') && 
+                            d.end && typeof d.end === 'string' && d.end.includes(':')) {
+                            const [sh, sm] = d.start.split(':').map(Number);
+                            const [eh, em] = d.end.split(':').map(Number);
+                            if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
+                                let diff = (eh + em/60) - (sh + sm/60);
+                                if (diff < 0) diff += 24;
+                                scheduled += diff;
+                            }
+                        }
+                    }
+                });
+                totalTarget += target;
+                totalScheduled += scheduled;
+                
+                balances.push({
+                    name: emp.name || 'Sin Nombre',
+                    diff: scheduled - target
+                });
+            });
+
+            DOM.dashBalance.textContent = `${Math.round(totalScheduled)} / ${totalTarget} hs`;
+            
+            balances.sort((a, b) => b.diff - a.diff);
+            
+            const extras = balances.filter(b => b.diff > 0).slice(0, 3);
+            DOM.dashExtras.innerHTML = extras.length ? extras.map(b => `<div>${b.name}: +${Math.round(b.diff)}hs</div>`).join('') : '<div>Ninguno</div>';
+            
+            const debtors = [...balances].sort((a, b) => a.diff - b.diff).filter(b => b.diff < 0).slice(0, 3);
+            DOM.dashDebtors.innerHTML = debtors.length ? debtors.map(b => `<div>${b.name}: ${Math.round(b.diff)}hs</div>`).join('') : '<div>Ninguno</div>';
+        } catch (err) {
+            console.error('Dashboard Error:', err);
         }
     }
 
-    function loadFromFile() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                try {
-                    const data = JSON.parse(ev.target.result);
-                    DOM.departmentName.value = data.department || '';
-                    DOM.monthSelect.value = data.month || 0;
-                    DOM.yearInput.value = data.year || 2026;
-                    DOM.targetHours.value = data.targetHours || 220;
+    // ───── EMPLOYEES DIRECTORY ─────
+    let directoryCache = [];
 
-                    refreshHolidays();
-                    if (data.holidays && Array.isArray(data.holidays)) {
-                        data.holidays.forEach(h => currentHolidays.push(h));
-                        currentHolidays.sort((a,b) => a.day - b.day);
-                        renderHolidays();
-                    }
+    async function loadDirectoryFromFirebase() {
+        if (!currentUser || !db) return [];
+        try {
+            const snapshot = await db.collection('users').doc(currentUser.uid).collection('directory').get();
+            let arr = [];
+            snapshot.forEach(doc => arr.push(doc.data()));
+            directoryCache = arr;
+            return arr;
+        } catch (e) {
+            console.error('Error load dir', e);
+            return [];
+        }
+    }
 
-                    if (data.employees && data.employees.length > 0) {
-                        employees = [];
-                        employeeIdCounter = 0;
-                        DOM.employeesContainer.innerHTML = '';
-                        data.employees.forEach(e => addEmployee(e));
+    async function saveDirectoryToFirebase() {
+        if (!currentUser || !db || !employees || employees.length === 0) return;
+        try {
+            const batch = db.batch();
+            const col = db.collection('users').doc(currentUser.uid).collection('directory');
+            employees.forEach(emp => {
+                if (emp.name.trim()) {
+                    const docId = emp.name.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (docId) {
+                        const ref = col.doc(docId);
+                        batch.set(ref, {
+                            name: emp.name,
+                            hours: emp.hours
+                        }, { merge: true });
                     }
-                    toast('Backup cargado exitosamente', 'success');
-                } catch (err) {
-                    toast('Archivo inválido', 'error');
                 }
-            };
-            reader.readAsText(file);
-        };
-        input.click();
+            });
+            await batch.commit();
+        } catch (e) {
+            console.error('Error save dir', e);
+        }
+    }
+
+    async function openDirectoryModal() {
+        DOM.directoryModal.style.display = 'flex';
+        DOM.directoryList.innerHTML = '<div style="padding: 16px; text-align: center; color: var(--text-muted);">Cargando directorio...</div>';
+        const dir = await loadDirectoryFromFirebase();
+        if (dir.length === 0) {
+            DOM.directoryList.innerHTML = '<div style="padding: 16px; text-align: center; color: var(--text-muted);">Tu directorio está vacío. Guardá un cronograma primero para poblarlo automáticamente.</div>';
+            return;
+        }
+        
+        DOM.directoryList.innerHTML = '';
+        dir.sort((a,b) => a.name.localeCompare(b.name)).forEach((emp, i) => {
+            const el = document.createElement('label');
+            el.style.display = 'flex';
+            el.style.alignItems = 'center';
+            el.style.gap = '12px';
+            el.style.padding = '8px';
+            el.style.background = 'rgba(255,255,255,0.05)';
+            el.style.borderRadius = '8px';
+            el.style.cursor = 'pointer';
+            
+            el.innerHTML = `
+                <input type="checkbox" class="dir-checkbox" value="${i}" style="width: 18px; height: 18px;">
+                <div style="flex: 1;">
+                    <div style="font-weight: 600;">${emp.name}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-muted);">${emp.hours} hs objetivo</div>
+                </div>
+            `;
+            DOM.directoryList.appendChild(el);
+        });
+    }
+
+    function importFromDirectory() {
+        saveHistoryState();
+        const checkboxes = document.querySelectorAll('.dir-checkbox:checked');
+        if (checkboxes.length === 0) {
+            toast('No seleccionaste ningún empleado', 'warning');
+            return;
+        }
+        
+        checkboxes.forEach(cb => {
+            const data = directoryCache[parseInt(cb.value)];
+            addEmployee({ name: data.name, hours: data.hours }, true);
+        });
+        
+        DOM.directoryModal.style.display = 'none';
+        toast(`${checkboxes.length} empleados importados`, 'success');
     }
 
     // ───── START ─────

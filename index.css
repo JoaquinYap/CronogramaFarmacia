@@ -13,6 +13,7 @@
     --bg-card: rgba(17, 24, 39, 0.6);
     --bg-card-inner: rgba(30, 41, 59, 0.5);
     --bg-input: rgba(15, 23, 42, 0.8);
+    --bg-header: rgba(10, 14, 26, 0.85);
     --border-color: rgba(108, 99, 255, 0.15);
     --border-color-hover: rgba(108, 99, 255, 0.35);
     --border-color-focus: rgba(108, 99, 255, 0.6);
@@ -53,6 +54,7 @@ html[data-theme="light"] {
     --bg-card: rgba(255, 255, 255, 0.85);
     --bg-card-inner: rgba(241, 245, 249, 0.7);
     --bg-input: #ffffff;
+    --bg-header: rgba(255, 255, 255, 0.85);
     --border-color: rgba(108, 99, 255, 0.2);
     --border-color-hover: rgba(108, 99, 255, 0.4);
     --border-color-focus: rgba(108, 99, 255, 0.7);
@@ -150,7 +152,7 @@ body {
     gap: 12px;
     padding: 14px 20px;
     border-radius: var(--radius-md);
-    background: rgba(17, 24, 39, 0.95);
+    background: var(--bg-header);
     backdrop-filter: blur(20px);
     border: 1px solid var(--border-color);
     box-shadow: var(--shadow-lg);
@@ -200,7 +202,7 @@ body {
     position: sticky;
     top: 0;
     z-index: 100;
-    background: rgba(10, 14, 26, 0.85);
+    background: var(--bg-header);
     backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--border-color);
 }
@@ -1296,4 +1298,19 @@ html[data-theme="light"] .pattern-day-row.type-lar { background: rgba(59, 130, 2
     opacity: 0;
     pointer-events: none;
     transform: translateY(20px) scale(0.8);
+}
+
+/* Spinner */
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: currentColor;
+    animation: spin 1s ease-in-out infinite;
+    display: inline-block;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
