@@ -43,6 +43,11 @@
     let generatedSchedule = null;
     let currentHolidays = [];
 
+    // New state variables (v2.0)
+    let isCompactView = false;
+    let copiedWeekPattern = null;
+    let autoSaveTimer = null;
+
     // Brush state
     let activeBrush = null;
     let customBrushes = [];
@@ -121,7 +126,12 @@
         dashBalance: $('#dash-balance'),
         dashExtras: $('#dash-extras'),
         dashDebtors: $('#dash-debtors'),
-        brushFab: $('#brush-fab')
+        brushFab: $('#brush-fab'),
+        employeeSearch: $('#employee-search'),
+        btnCompactView: $('#btn-compact-view'),
+        btnDownloadPdf: $('#btn-download-pdf'),
+        statsSummaryContainer: $('#stats-summary-container'),
+        autosaveIndicator: $('#autosave-indicator')
     };
 
     // ───── HISTORY STATE (UNDO/REDO) ─────
@@ -168,6 +178,366 @@
         if (DOM.btnRedo) DOM.btnRedo.disabled = redoStack.length === 0;
     }
 
+    // ───── AUTO-SAVE ─────
+    function autoSave() {
+        clearTimeout(autoSaveTimer);
+        autoSaveTimer = setTimeout(() => {
+            try {
+                const data = {
+                    employees: employees.map(e => ({
+                        name: e.name, hours: e.hours,
+                        larEnabled: e.larEnabled, larStart: e.larStart, larEnd: e.larEnd,
+                        larHoursPerDay: e.larHoursPerDay, days: e.days
+                    })),
+                    month: DOM.monthSelect.value,
+                    year: DOM.yearInput.value,
+                    department: DOM.departmentName.value,
+                    targetHours: DOM.targetHours.value,
+                    holidays: currentHolidays.filter(h => h.custom),
+                    timestamp: Date.now()
+                };
+                localStorage.setItem('cronoexcel_autosave', JSON.stringify(data));
+                if (DOM.autosaveIndicator) {
+                    const now = new Date();
+                    DOM.autosaveIndicator.textContent = 'Guardado auto: ' + now.toLocaleTimeString();
+                    DOM.autosaveIndicator.style.opacity = '1';
+                    setTimeout(() => { DOM.autosaveIndicator.style.opacity = '0.5'; }, 2000);
+                }
+            } catch(e) { console.warn('AutoSave error:', e); }
+        }, 1000);
+    }
+
+    function checkAutoSave() {
+        try {
+            const saved = localStorage.getItem('cronoexcel_autosave');
+            if (!saved) return;
+            const data = JSON.parse(saved);
+            if (!data.employees || data.employees.length === 0) return;
+            const age = Date.now() - (data.timestamp || 0);
+            if (age > 7 * 24 * 60 * 60 * 1000) { localStorage.removeItem('cronoexcel_autosave'); return; }
+            
+            const banner = document.createElement('div');
+            banner.className = 'autosave-banner';
+            banner.innerHTML = `
+                <div class="autosave-text">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="var(--accent-primary)" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17,21 17,13 7,13 7,21"/></svg>
+                    Tenés un cronograma sin guardar (${data.employees.length} empleados, ${data.department || 'Sin nombre'})
+                </div>
+                <div class="autosave-actions">
+                    <button class="btn btn-primary btn-sm" id="btn-restore-autosave">Recuperar</button>
+                    <button class="btn btn-ghost btn-sm" id="btn-discard-autosave">Descartar</button>
+                </div>`;
+            
+            const main = document.querySelector('.main-content');
+            if (main) main.prepend(banner);
+            
+            document.getElementById('btn-restore-autosave').addEventListener('click', () => {
+                applyAutoSaveData(data);
+                banner.remove();
+                localStorage.removeItem('cronoexcel_autosave');
+                toast('Cronograma recuperado', 'success');
+            });
+            document.getElementById('btn-discard-autosave').addEventListener('click', () => {
+                banner.remove();
+                localStorage.removeItem('cronoexcel_autosave');
+                toast('Borrador descartado', 'info');
+            });
+        } catch(e) { console.warn('AutoSave check error:', e); }
+    }
+
+    function applyAutoSaveData(data) {
+        DOM.departmentName.value = data.department || '';
+        DOM.monthSelect.value = data.month || 0;
+        DOM.yearInput.value = data.year || 2026;
+        DOM.targetHours.value = data.targetHours || 220;
+        refreshHolidays();
+        if (data.holidays && Array.isArray(data.holidays)) {
+            data.holidays.forEach(h => currentHolidays.push(h));
+            currentHolidays.sort((a,b) => a.day - b.day);
+            renderHolidays();
+        }
+        if (data.employees && data.employees.length > 0) {
+            employees = [];
+            employeeIdCounter = 0;
+            DOM.employeesContainer.innerHTML = '';
+            data.employees.forEach(e => addEmployee(e, true));
+        }
+    }
+
+    // ───── VALIDATION ─────
+    function validateEmployee(emp) {
+        const warnings = [];
+        if (!emp.name || emp.name.trim() === '') warnings.push({ msg: 'Sin nombre', type: 'error' });
+        const workDays = (emp.days || []).filter(d => d.type === 'work' || d.type === 'lar').length;
+        if (workDays === 0) warnings.push({ msg: '0 días de trabajo', type: 'error' });
+        let totalHours = 0;
+        (emp.days || []).forEach(d => {
+            if ((d.type === 'work' || d.type === 'lar') && d.start && d.end) {
+                totalHours += calcHours(d.start, d.end);
+            }
+        });
+        if (emp.hours > 0 && totalHours < emp.hours * 0.5 && totalHours > 0) {
+            warnings.push({ msg: 'Menos del 50% de hs objetivo', type: 'warning' });
+        }
+        return warnings;
+    }
+
+    function updateEmployeeWarnings(emp, card) {
+        let container = card.querySelector('.emp-warnings');
+        if (!container) {
+            container = document.createElement('div');
+            container.className = 'emp-warnings';
+            const header = card.querySelector('.employee-card-header');
+            if (header) header.after(container);
+        }
+        const warnings = validateEmployee(emp);
+        container.innerHTML = warnings.map(w => 
+            `<span class="emp-warning-badge ${w.type}">⚠ ${w.msg}</span>`
+        ).join('');
+    }
+
+    // ───── SEARCH / FILTER ─────
+    function setupEmployeeSearch() {
+        if (!DOM.employeeSearch) return;
+        DOM.employeeSearch.addEventListener('input', () => {
+            const query = DOM.employeeSearch.value.toLowerCase().trim();
+            $$('.employee-card').forEach(card => {
+                const nameInput = card.querySelector('.emp-name');
+                const name = nameInput ? nameInput.value.toLowerCase() : '';
+                if (!query || name.includes(query)) {
+                    card.classList.remove('search-hidden');
+                } else {
+                    card.classList.add('search-hidden');
+                }
+            });
+        });
+    }
+
+    // ───── COMPACT VIEW ─────
+    function toggleCompactView() {
+        isCompactView = !isCompactView;
+        if (isCompactView) {
+            DOM.employeesContainer.classList.add('compact-view');
+            DOM.btnCompactView.classList.add('btn-compact-active');
+        } else {
+            DOM.employeesContainer.classList.remove('compact-view');
+            DOM.btnCompactView.classList.remove('btn-compact-active');
+        }
+    }
+
+    // ───── COPY/PASTE WEEK ─────
+    function copyWeekPattern(empId, weekDays) {
+        copiedWeekPattern = weekDays.map(d => ({ type: d.type, start: d.start, end: d.end }));
+        toast('Semana copiada al portapapeles', 'success');
+        // Update paste buttons visibility
+        $('.btn-paste-week').forEach(btn => btn.classList.add('paste-available'));
+    }
+
+    function pasteWeekPattern(empId, weekDayNums) {
+        if (!copiedWeekPattern) { toast('No hay semana copiada', 'warning'); return; }
+        saveHistoryState();
+        const emp = employees.find(e => e.id === empId);
+        if (!emp) return;
+        weekDayNums.forEach((dayNum, i) => {
+            if (i < copiedWeekPattern.length && emp.days[dayNum - 1]) {
+                const src = copiedWeekPattern[i];
+                emp.days[dayNum - 1].type = src.type;
+                emp.days[dayNum - 1].start = src.start;
+                emp.days[dayNum - 1].end = src.end;
+            }
+        });
+        const card = document.querySelector(`.employee-card[data-employee-id="${empId}"]`);
+        if (card) {
+            const container = card.querySelector('.employee-weeks-container');
+            if (container) { container.innerHTML = ''; renderWeeksGrid(container, empId); }
+            recalcLiveHours(empId, card);
+            updateEmployeeWarnings(emp, card);
+        }
+        autoSave();
+        toast('Semana pegada', 'success');
+    }
+
+    // ───── STATS SUMMARY TABLE ─────
+    function renderStatsSummary(schedule) {
+        const container = DOM.statsSummaryContainer;
+        if (!container) return;
+        const { employees: emps } = schedule;
+        
+        let html = '<table class="stats-summary-table"><thead><tr>';
+        html += '<th>Empleado</th><th>Hs Objetivo</th><th>Hs Asignadas</th><th>Diferencia</th>';
+        html += '<th>Días Trabajo</th><th>Francos</th><th>L.A.R.</th><th>Ausentes</th>';
+        html += '</tr></thead><tbody>';
+        
+        let totalTarget = 0, totalAssigned = 0, totalWork = 0, totalFranco = 0, totalLar = 0, totalAusente = 0;
+        
+        emps.forEach(emp => {
+            const workDays = emp.days.filter(d => d.type === 'work').length;
+            const francoDays = emp.days.filter(d => d.type === 'franco').length;
+            const larDays = emp.days.filter(d => d.type === 'lar').length;
+            const ausenteDays = emp.days.filter(d => d.type === 'ausente').length;
+            const diff = emp.totalHours - emp.targetHours;
+            const diffClass = diff > 0 ? 'stat-positive' : diff < 0 ? 'stat-negative' : 'stat-neutral';
+            const diffStr = (diff >= 0 ? '+' : '') + diff;
+            
+            totalTarget += emp.targetHours;
+            totalAssigned += emp.totalHours;
+            totalWork += workDays;
+            totalFranco += francoDays;
+            totalLar += larDays;
+            totalAusente += ausenteDays;
+            
+            html += `<tr>
+                <td style="font-weight:600;">${emp.name || 'Sin nombre'}</td>
+                <td>${emp.targetHours}h</td>
+                <td>${emp.totalHours}h</td>
+                <td class="${diffClass}">${diffStr}h</td>
+                <td>${workDays}</td>
+                <td>${francoDays}</td>
+                <td>${larDays}</td>
+                <td>${ausenteDays}</td>
+            </tr>`;
+        });
+        
+        const totalDiff = totalAssigned - totalTarget;
+        const totalDiffClass = totalDiff > 0 ? 'stat-positive' : totalDiff < 0 ? 'stat-negative' : 'stat-neutral';
+        html += `<tr style="font-weight:700; border-top: 2px solid var(--border-color);">
+            <td>TOTAL</td>
+            <td>${totalTarget}h</td>
+            <td>${totalAssigned}h</td>
+            <td class="${totalDiffClass}">${(totalDiff >= 0 ? '+' : '') + totalDiff}h</td>
+            <td>${totalWork}</td>
+            <td>${totalFranco}</td>
+            <td>${totalLar}</td>
+            <td>${totalAusente}</td>
+        </tr>`;
+        
+        html += '</tbody></table>';
+        container.innerHTML = html;
+        container.style.display = 'block';
+    }
+
+    // ───── COUNT-UP ANIMATION ─────
+    function animateCountUp(element, targetText) {
+        const match = targetText.match(/(\d+)/);
+        if (!match) { element.textContent = targetText; return; }
+        const target = parseInt(match[1]);
+        const duration = 600;
+        const start = performance.now();
+        function step(now) {
+            const elapsed = now - start;
+            const progress = Math.min(elapsed / duration, 1);
+            const eased = 1 - Math.pow(1 - progress, 3);
+            const current = Math.round(target * eased);
+            element.textContent = targetText.replace(match[1], current);
+            if (progress < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    }
+
+    // ───── DOWNLOAD PDF (separate from WhatsApp) ─────
+    async function downloadPDF() {
+        if (!generatedSchedule) {
+            toast('Primero genera la vista previa', 'warning');
+            return;
+        }
+        const btn = DOM.btnDownloadPdf || $('#btn-download-pdf');
+        if (!btn) return;
+        const originalText = btn.innerHTML;
+        btn.innerHTML = `<span class="spinner" style="margin-right: 8px;"></span> Generando PDF...`;
+        btn.disabled = true;
+
+        try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'landscape', format: 'legal' });
+            const { month, year, department, daysInMonth, employees: emps } = generatedSchedule;
+            const depStr = currentLoadedScheduleName ? currentLoadedScheduleName : (department ? department.toUpperCase().trim() : 'DEPOSITO');
+            const title = `CRONOGRAMA ${depStr} ${MONTH_NAMES[month].toUpperCase()} ${year}`;
+
+            const body = [];
+            const defaultTarget = DOM.targetHours.value || 220;
+            const lastCol = daysInMonth + 2;
+
+            emps.forEach((emp, idx) => {
+                const r1 = []; const r2 = []; const r3 = []; const r4 = [];
+                r1.push({ content: emp.name, rowSpan: 4, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 7 } });
+                for (let d = 0; d < daysInMonth; d++) {
+                    const day = emp.days[d];
+                    const isRed = day.isRed;
+                    const cColor = isRed ? [255, 0, 0] : [0, 0, 0];
+                    const dow = new Date(year, month, d + 1).getDay();
+                    r1.push({ content: DAY_ABBRS[dow], styles: { halign: 'center', fontSize: 5, textColor: cColor } });
+                    r2.push({ content: String(d + 1), styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor: cColor } });
+                }
+                r1.push({ content: 'HS OBJ', rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 5 } });
+                body.push(r1); body.push(r2);
+
+                let d = 0;
+                while (d < daysInMonth) {
+                    const day = emp.days[d];
+                    if (day.type !== 'work' && day.type !== 'lar') {
+                        const label = day.type === 'franco' ? 'FRANCO' : day.type === 'ausente' ? 'AUSENTE' : day.type === 'descanso' ? 'DESC' : day.type.toUpperCase();
+                        let runEnd = d;
+                        while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === day.type) runEnd++;
+                        const span = runEnd - d + 1;
+                        r3.push({ content: label, colSpan: span, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: span >= 3 ? 7 : 5, textColor: day.type === 'franco' ? [200,0,0] : [100,100,100] } });
+                        d = runEnd + 1;
+                    } else {
+                        let runEnd = d;
+                        while (runEnd + 1 < daysInMonth && (emp.days[runEnd + 1].type === 'work' || emp.days[runEnd + 1].type === 'lar') && emp.days[runEnd + 1].start === day.start && emp.days[runEnd + 1].end === day.end) runEnd++;
+                        const runLen = runEnd - d + 1;
+                        if (runLen >= 3) {
+                            r3.push({ content: `${day.start} A ${day.end}`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 8 : 6, textColor: [0,0,0] } });
+                            d = runEnd + 1;
+                        } else {
+                            for (let i = d; i <= runEnd; i++) {
+                                const cColor = emp.days[i].isRed ? [255,0,0] : [0,0,0];
+                                r3.push({ content: emp.days[i].start, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
+                                r4.push({ content: emp.days[i].end, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
+                            }
+                            d = runEnd + 1;
+                        }
+                    }
+                }
+                r3.push({ content: String(emp.targetHours), rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 8 } });
+                body.push(r3);
+                if (r4.length > 0) body.push(r4);
+                else body.push([{ content: '', colSpan: daysInMonth }]);
+            });
+
+            const legendRow1 = [];
+            legendRow1.push({ content: `HORAS A TRABAJAR: ${defaultTarget} HS`, colSpan: lastCol - 7, styles: { halign: 'center', fontStyle: 'bold', fontSize: 8 } });
+            legendRow1.push({ content: 'F: Franco', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
+            legendRow1.push({ content: 'N: Turno noche', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
+            body.push(legendRow1);
+
+            doc.setFontSize(12);
+            doc.setFont('helvetica', 'bold');
+            doc.text(title, doc.internal.pageSize.getWidth() / 2, 10, { align: 'center' });
+
+            doc.autoTable({
+                body: body,
+                startY: 14,
+                theme: 'grid',
+                styles: { fontSize: 6, cellPadding: 1.5, lineWidth: 0.1, lineColor: [0, 0, 0], font: 'helvetica', overflow: 'hidden' },
+                columnStyles: { 0: { cellWidth: 30 } },
+                didParseCell: function (data) {
+                    if (data.row.index < body.length - 1) {
+                        data.cell.styles.fillColor = [255, 255, 255];
+                    }
+                }
+            });
+
+            const fileName = `Cronograma_${MONTH_NAMES[month]}_${year}.pdf`;
+            doc.save(fileName);
+            toast('PDF descargado correctamente', 'success');
+        } catch (error) {
+            console.error(error);
+            toast('Error al generar PDF: ' + error.message, 'error');
+        }
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+    }
+
     function confirmAction(title, msg, confirmText = 'Confirmar', isDanger = true) {
         return new Promise(resolve => {
             const modal = $('#action-confirm-modal');
@@ -205,7 +575,9 @@
         applyTheme(currentTheme);
         populateMonthSelect();
         bindEvents();
+        setupEmployeeSearch();
         initAuth();
+        checkAutoSave();
         
         // Intenta cargar configuracion antigua de localstorage si existiera
         loadFromStorageLegacy();
@@ -461,6 +833,16 @@
         document.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
             if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redo(); }
+            if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveConfigToCloud(); }
+            if (e.ctrlKey && e.key === 'n') { e.preventDefault(); addEmployee(); toast('Empleado agregado', 'success'); }
+            if (e.ctrlKey && e.key === 'p') { e.preventDefault(); generateAndShowPreview(); }
+            if (e.key === 'Escape') {
+                // Close any open modal
+                ['#auth-modal', '#save-modal', '#load-modal', '#directory-modal', '#action-confirm-modal'].forEach(sel => {
+                    const m = $(sel);
+                    if (m && m.style.display !== 'none') m.style.display = 'none';
+                });
+            }
         });
 
         // Initialize SortableJS
@@ -523,8 +905,22 @@
             $('#new-holiday-name').value = '';
             toast('Feriado agregado', 'success');
         });
-        DOM.monthSelect.addEventListener('change', onMonthYearChange);
-        DOM.yearInput.addEventListener('change', onMonthYearChange);
+        DOM.monthSelect.addEventListener('change', async (e) => {
+            if (employees.length > 0) {
+                const ok = await confirmAction('Cambiar Mes', 'Se resetearán los horarios de ' + employees.length + ' empleado(s). ¿Continuar?', 'Sí, cambiar', false);
+                if (!ok) { e.target.value = e.target._prevValue || e.target.value; return; }
+            }
+            e.target._prevValue = e.target.value;
+            onMonthYearChange();
+        });
+        DOM.yearInput.addEventListener('change', async (e) => {
+            if (employees.length > 0) {
+                const ok = await confirmAction('Cambiar Año', 'Se resetearán los horarios de ' + employees.length + ' empleado(s). ¿Continuar?', 'Sí, cambiar', false);
+                if (!ok) { e.target.value = e.target._prevValue || e.target.value; return; }
+            }
+            e.target._prevValue = e.target.value;
+            onMonthYearChange();
+        });
 
         $('#btn-next-employees').addEventListener('click', () => navigateTo(2));
         $('#btn-back-config').addEventListener('click', () => navigateTo(1));
@@ -536,8 +932,12 @@
         });
         $('#btn-export-excel').addEventListener('click', exportToExcel);
         $('#btn-share-whatsapp').addEventListener('click', sharePDF);
+        $('#btn-download-pdf').addEventListener('click', downloadPDF);
         $('#btn-save-config').addEventListener('click', saveConfigToCloud);
         $('#btn-load-config').addEventListener('click', loadConfigFromCloud);
+        
+        // Compact view
+        if (DOM.btnCompactView) DOM.btnCompactView.addEventListener('click', toggleCompactView);
 
         $$('.step').forEach(s => {
             s.addEventListener('click', () => {
@@ -734,12 +1134,14 @@
         employees.push(emp);
         renderEmployeeCard(emp);
         renumberEmployees();
+        autoSave();
         return emp;
     }
 
     function removeEmployee(id) {
         saveHistoryState();
         employees = employees.filter(e => e.id !== id);
+        autoSave();
         const card = $(`.employee-card[data-employee-id="${id}"]`);
         if (card) {
             card.style.transition = 'all 0.3s ease';
@@ -768,10 +1170,12 @@
         nameInput.value = emp.name;
         hoursInput.value = emp.hours;
 
-        nameInput.addEventListener('input', () => { emp.name = nameInput.value; });
+        nameInput.addEventListener('input', () => { emp.name = nameInput.value; autoSave(); updateEmployeeWarnings(emp, card); });
         hoursInput.addEventListener('input', () => { 
             emp.hours = parseInt(hoursInput.value) || 0; 
             recalcLiveHours(emp.id, card);
+            autoSave();
+            updateEmployeeWarnings(emp, card);
         });
 
         card.querySelector('.btn-duplicate-employee').addEventListener('click', () => {
@@ -891,6 +1295,7 @@
 
         renderWeeksGrid(card.querySelector('.employee-weeks-container'), emp.id);
         recalcLiveHours(emp.id, card);
+        updateEmployeeWarnings(emp, card);
         DOM.employeesContainer.appendChild(card);
     }
 
@@ -1141,6 +1546,7 @@
 
             weekBlock.appendChild(header);
             weekBlock.appendChild(grid);
+            
             container.appendChild(weekBlock);
         });
     }
@@ -1244,6 +1650,14 @@
 
             const schedule = generateSchedule();
             renderPreview(schedule);
+            renderStatsSummary(schedule);
+            
+            // Count-up animation on dashboard
+            if (DOM.dashBalance) {
+                const finalText = DOM.dashBalance.textContent;
+                animateCountUp(DOM.dashBalance, finalText);
+            }
+            
             navigateTo(3);
             toast('Cronograma generado correctamente', 'success');
         } catch (error) {

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cronoexcel-v40';
+const CACHE_NAME = 'cronoexcel-v50';
 const ASSETS = [
     './',
     './index.html',
