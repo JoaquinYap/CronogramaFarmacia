@@ -1,6 +1,6 @@
 // ============================================================
 // CronoExcel — app.js
-// Complete schedule automation with ExcelJS export, Holidays & Weeks
+// Complete schedule automation with ExcelJS export, Holidays & Weeks PROBANDO
 // ============================================================
 
 (() => {
