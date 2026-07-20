@@ -448,83 +448,160 @@
 
         try {
             const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ orientation: 'landscape', format: 'legal' });
+            const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+            
             const { month, year, department, daysInMonth, employees: emps } = generatedSchedule;
-            const depStr = currentLoadedScheduleName ? currentLoadedScheduleName : (department ? department.toUpperCase().trim() : 'DEPOSITO');
-            const title = `CRONOGRAMA ${depStr} ${MONTH_NAMES[month].toUpperCase()} ${year}`;
-
+            const depName = department ? department.toUpperCase().trim() : 'DEPOSITO';
+            const title = `CRONOGRAMA ${depName} ${MONTH_NAMES[month].toUpperCase()} ${year}`;
+            
             const body = [];
-            const defaultTarget = DOM.targetHours.value || 220;
-            const lastCol = daysInMonth + 2;
+            const lastCol = daysInMonth + 1;
+            const defaultTarget = parseInt(DOM.targetHours.value) || 220;
 
-            emps.forEach((emp, idx) => {
-                const r1 = []; const r2 = []; const r3 = []; const r4 = [];
-                r1.push({ content: emp.name, rowSpan: 4, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 7 } });
+            const getRed = (isRed) => isRed ? [255, 0, 0] : [0, 0, 0];
+
+            const r1 = [];
+            r1.push({ content: department, colSpan: lastCol - 7, styles: { halign: 'center', fontStyle: 'bold', fontSize: 10 } });
+            r1.push({ content: 'M: Turno Mañana', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
+            r1.push({ content: 'D: Descanso', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
+            body.push(r1);
+
+            const r2 = [];
+            r2.push({ content: 'DISTRIBUCION DE TURNOS', colSpan: lastCol - 7, styles: { halign: 'center', fontSize: 8 } });
+            r2.push({ content: 'T: Turno Tarde', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
+            r2.push({ content: 'A: Ausente', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
+            body.push(r2);
+
+            const r3 = [];
+            r3.push({ content: `HORAS A TRABAJAR: ${defaultTarget} HS`, colSpan: lastCol - 7, styles: { halign: 'center', fontStyle: 'bold', fontSize: 8 } });
+            r3.push({ content: 'F: Franco', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
+            r3.push({ content: 'N: Turno noche', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
+            body.push(r3);
+
+            const r4 = [];
+            r4.push({ content: MONTH_NAMES[month].toUpperCase(), styles: { halign: 'center', fontStyle: 'bold', fontSize: 10 } });
+            r4.push({ content: '', colSpan: lastCol - 1, rowSpan: 2 });
+            body.push(r4);
+
+            const r5 = [];
+            r5.push({ content: year.toString(), styles: { halign: 'center', fontStyle: 'bold', fontSize: 10 } });
+            body.push(r5);
+
+            const allEmps = [...emps];
+            for (let t = 0; t < 2; t++) {
+                allEmps.push({
+                    id: 'New', name: '', targetHours: defaultTarget, totalHours: 0, diff: -defaultTarget,
+                    days: Array.from({ length: daysInMonth }, (_, i) => ({
+                        dayNum: i + 1, dow: new Date(year, month, i + 1).getDay(),
+                        dowAbbr: DAY_ABBRS[new Date(year, month, i + 1).getDay()],
+                        type: '', start: '', end: '', hours: 0,
+                        isRed: new Date(year, month, i + 1).getDay() === 0 || isHoliday(i+1)
+                    })),
+                    isEmpty: true,
+                });
+            }
+
+            // Calculate dynamic column widths to fill the page (matching Excel export)
+            const pageWidth = doc.internal.pageSize.getWidth(); // A4 landscape = 297mm
+            const marginH = 18.5; // ~52.5pt matching the reference PDF
+            const usableWidth = pageWidth - marginH * 2;
+            const nameColWidth = 30;
+            const dayColWidth = (usableWidth - nameColWidth) / daysInMonth;
+            const colStyles = { 0: { cellWidth: nameColWidth } };
+            for (let c = 1; c <= daysInMonth; c++) {
+                colStyles[c] = { cellWidth: dayColWidth };
+            }
+
+            for (const emp of allEmps) {
+                const er1 = [];
+                er1.push({ content: emp.name, rowSpan: 3, styles: { halign: 'left', valign: 'middle', fontStyle: 'bold', fontSize: 8 } });
                 for (let d = 0; d < daysInMonth; d++) {
                     const day = emp.days[d];
-                    const isRed = day.isRed;
-                    const cColor = isRed ? [255, 0, 0] : [0, 0, 0];
-                    const dow = new Date(year, month, d + 1).getDay();
-                    r1.push({ content: DAY_ABBRS[dow], styles: { halign: 'center', fontSize: 5, textColor: cColor } });
-                    r2.push({ content: String(d + 1), styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor: cColor } });
+                    er1.push({ content: day.dowAbbr, styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor: getRed(day.isRed) } });
                 }
-                r1.push({ content: 'HS OBJ', rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 5 } });
-                body.push(r1); body.push(r2);
+                body.push(er1);
 
+                const er2 = [];
+                for (let d = 0; d < daysInMonth; d++) {
+                    const day = emp.days[d];
+                    er2.push({ content: day.dayNum.toString(), styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor: getRed(day.isRed) } });
+                }
+                body.push(er2);
+
+                const er3 = [];
+                const er4 = [];
+                
+                const hsText = emp.isEmpty ? 'HS: 0   /T: 0 / D:0' : `HS: ${emp.targetHours}   /T: ${emp.totalHours} / D:${emp.diff}`;
+                er4.push({ content: hsText, styles: { halign: 'left', fontSize: 5, fontStyle: 'bold' } });
+                
                 let d = 0;
                 while (d < daysInMonth) {
+                    if (emp.isEmpty) {
+                        er3.push({ content: '', styles: {} });
+                        er4.push({ content: '', styles: {} });
+                        d++;
+                        continue;
+                    }
+
                     const day = emp.days[d];
-                    if (day.type !== 'work' && day.type !== 'lar') {
-                        const label = day.type === 'franco' ? 'FRANCO' : day.type === 'ausente' ? 'AUSENTE' : day.type === 'descanso' ? 'DESC' : day.type.toUpperCase();
+                    const textColor = getRed(day.isRed);
+                    
+                    if (day.type === 'lar') {
                         let runEnd = d;
-                        while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === day.type) runEnd++;
-                        const span = runEnd - d + 1;
-                        r3.push({ content: label, colSpan: span, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: span >= 3 ? 7 : 5, textColor: day.type === 'franco' ? [200,0,0] : [100,100,100] } });
+                        while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'lar') runEnd++;
+                        const runLen = runEnd - d + 1;
+                        
+                        er3.push({ content: `L.A.R. ${runLen} DIAS`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 10 : 6, textColor: [0,0,0] } });
                         d = runEnd + 1;
+                    } else if (day.type !== 'work') {
+                        const label = day.type === 'franco' ? 'F' : day.type === 'descanso' ? 'D' : 'A';
+                        const labelColor = day.type === 'franco' ? [200, 0, 0] : textColor;
+                        er3.push({ content: label, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 10, textColor: labelColor } });
+                        d++;
                     } else {
                         let runEnd = d;
-                        while (runEnd + 1 < daysInMonth && (emp.days[runEnd + 1].type === 'work' || emp.days[runEnd + 1].type === 'lar') && emp.days[runEnd + 1].start === day.start && emp.days[runEnd + 1].end === day.end) runEnd++;
+                        while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'work' && emp.days[runEnd + 1].start === day.start && emp.days[runEnd + 1].end === day.end) runEnd++;
                         const runLen = runEnd - d + 1;
+
                         if (runLen >= 3) {
-                            r3.push({ content: `${day.start} A ${day.end}`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 8 : 6, textColor: [0,0,0] } });
+                            er3.push({ content: `${day.start} A ${day.end}`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 8 : 6, textColor: [0,0,0] } });
                             d = runEnd + 1;
                         } else {
                             for (let i = d; i <= runEnd; i++) {
-                                const cColor = emp.days[i].isRed ? [255,0,0] : [0,0,0];
-                                r3.push({ content: emp.days[i].start, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
-                                r4.push({ content: emp.days[i].end, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
+                                const cColor = getRed(emp.days[i].isRed);
+                                er3.push({ content: emp.days[i].start, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
+                                er4.push({ content: emp.days[i].end, styles: { halign: 'center', fontStyle: 'bold', fontSize: 5, textColor: cColor } });
                             }
                             d = runEnd + 1;
                         }
                     }
                 }
-                r3.push({ content: String(emp.targetHours), rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 8 } });
-                body.push(r3);
-                if (r4.length > 0) body.push(r4);
-                else body.push([{ content: '', colSpan: daysInMonth }]);
-            });
+                body.push(er3);
+                body.push(er4);
 
-            const legendRow1 = [];
-            legendRow1.push({ content: `HORAS A TRABAJAR: ${defaultTarget} HS`, colSpan: lastCol - 7, styles: { halign: 'center', fontStyle: 'bold', fontSize: 8 } });
-            legendRow1.push({ content: 'F: Franco', colSpan: 4, styles: { halign: 'left', fontStyle: 'bold', fontSize: 8 } });
-            legendRow1.push({ content: 'N: Turno noche', colSpan: 3, styles: { halign: 'left', fontSize: 8 } });
-            body.push(legendRow1);
-
-            doc.setFontSize(12);
-            doc.setFont('helvetica', 'bold');
-            doc.text(title, doc.internal.pageSize.getWidth() / 2, 10, { align: 'center' });
+                const er5 = [];
+                er5.push({ content: emp.isEmpty ? '' : (emp.totalHours !== undefined && emp.totalHours !== null ? emp.totalHours : 0), styles: { halign: 'center', fontStyle: 'bold', fontSize: 6 } });
+                for (let d = 0; d < daysInMonth; d++) {
+                    const day = emp.days[d];
+                    const textColor = getRed(day.isRed);
+                    er5.push({ content: day.hours > 0 ? day.hours.toString() : '', styles: { halign: 'center', fontStyle: 'bold', fontSize: 6, textColor } });
+                }
+                
+                er5.forEach(c => {
+                    if(!c.styles) c.styles = {};
+                    c.styles.lineWidth = { top: 0.1, right: 0.1, left: 0.1, bottom: 0.3 };
+                });
+                body.push(er5);
+            }
 
             doc.autoTable({
                 body: body,
-                startY: 14,
+                startY: 19,
                 theme: 'grid',
-                styles: { fontSize: 6, cellPadding: 1.5, lineWidth: 0.1, lineColor: [0, 0, 0], font: 'helvetica', overflow: 'hidden' },
-                columnStyles: { 0: { cellWidth: 30 } },
-                didParseCell: function (data) {
-                    if (data.row.index < body.length - 1) {
-                        data.cell.styles.fillColor = [255, 255, 255];
-                    }
-                }
+                styles: { cellPadding: 1, lineColor: [0, 0, 0], lineWidth: 0.1, font: 'helvetica' },
+                columnStyles: colStyles,
+                margin: { top: 19, right: marginH, bottom: 10, left: marginH },
+                tableWidth: usableWidth
             });
 
             const fileName = `Cronograma_${MONTH_NAMES[month]}_${year}.pdf`;
@@ -1740,11 +1817,11 @@
 
         try {
             const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ orientation: 'landscape', format: 'legal' });
+            const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
             
             const { month, year, department, daysInMonth, employees: emps } = generatedSchedule;
-            const depStr = currentLoadedScheduleName ? currentLoadedScheduleName : (department ? department.toUpperCase().trim() : 'DEPOSITO');
-            const title = `CRONOGRAMA ${depStr} ${MONTH_NAMES[month].toUpperCase()} ${year}`;
+            const depName = department ? department.toUpperCase().trim() : 'DEPOSITO';
+            const title = `CRONOGRAMA ${depName} ${MONTH_NAMES[month].toUpperCase()} ${year}`;
             
             const body = [];
             const lastCol = daysInMonth + 1;
@@ -1793,6 +1870,17 @@
                 });
             }
 
+            // Calculate dynamic column widths to fill the page (matching Excel export)
+            const pageWidth = doc.internal.pageSize.getWidth(); // A4 landscape = 297mm
+            const marginH = 18.5; // ~52.5pt matching the reference PDF
+            const usableWidth = pageWidth - marginH * 2;
+            const nameColWidth = 30;
+            const dayColWidth = (usableWidth - nameColWidth) / daysInMonth;
+            const colStyles = { 0: { cellWidth: nameColWidth } };
+            for (let c = 1; c <= daysInMonth; c++) {
+                colStyles[c] = { cellWidth: dayColWidth };
+            }
+
             for (const emp of allEmps) {
                 const er1 = [];
                 er1.push({ content: emp.name, rowSpan: 3, styles: { halign: 'left', valign: 'middle', fontStyle: 'bold', fontSize: 8 } });
@@ -1812,7 +1900,7 @@
                 const er3 = [];
                 const er4 = [];
                 
-                const hsText = emp.isEmpty ? `HS: ${emp.targetHours}   /T: 0 / D:${-emp.targetHours}` : `HS: ${emp.targetHours}   /T: ${emp.totalHours} / D:${emp.diff}`;
+                const hsText = emp.isEmpty ? 'HS: 0   /T: 0 / D:0' : `HS: ${emp.targetHours}   /T: ${emp.totalHours} / D:${emp.diff}`;
                 er4.push({ content: hsText, styles: { halign: 'left', fontSize: 5, fontStyle: 'bold' } });
                 
                 let d = 0;
@@ -1836,7 +1924,8 @@
                         d = runEnd + 1;
                     } else if (day.type !== 'work') {
                         const label = day.type === 'franco' ? 'F' : day.type === 'descanso' ? 'D' : 'A';
-                        er3.push({ content: label, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 10, textColor } });
+                        const labelColor = day.type === 'franco' ? [200, 0, 0] : textColor;
+                        er3.push({ content: label, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: 10, textColor: labelColor } });
                         d++;
                     } else {
                         let runEnd = d;
@@ -1860,7 +1949,7 @@
                 body.push(er4);
 
                 const er5 = [];
-                er5.push({ content: emp.totalHours || '', styles: { halign: 'center', fontStyle: 'bold', fontSize: 6 } });
+                er5.push({ content: emp.isEmpty ? '' : (emp.totalHours !== undefined && emp.totalHours !== null ? emp.totalHours : 0), styles: { halign: 'center', fontStyle: 'bold', fontSize: 6 } });
                 for (let d = 0; d < daysInMonth; d++) {
                     const day = emp.days[d];
                     const textColor = getRed(day.isRed);
@@ -1876,13 +1965,12 @@
 
             doc.autoTable({
                 body: body,
-                startY: 10,
+                startY: 19,
                 theme: 'grid',
                 styles: { cellPadding: 1, lineColor: [0, 0, 0], lineWidth: 0.1, font: 'helvetica' },
-                columnStyles: {
-                    0: { cellWidth: 50 }
-                },
-                margin: { top: 10, right: 10, bottom: 10, left: 10 }
+                columnStyles: colStyles,
+                margin: { top: 19, right: marginH, bottom: 10, left: marginH },
+                tableWidth: usableWidth
             });
 
             const fileName = `${title}.pdf`;
@@ -2046,9 +2134,9 @@
             ws.mergeCells(r1, 1, r3, 1);
             setCell(r1, 1, displayName, { font: fontTNR(10, true), alignment: alignLeft, border: borderAll });
             
-            const hsText = emp.isEmpty ? `HS: ${emp.targetHours}   /T: 0 / D:${-emp.targetHours}` : `HS: ${emp.targetHours}   /T: ${emp.totalHours} / D:${emp.diff}`;
+            const hsText = emp.isEmpty ? 'HS: 0   /T: 0 / D:0' : `HS: ${emp.targetHours}   /T: ${emp.totalHours} / D:${emp.diff}`;
             setCell(r4, 1, hsText, { font: fontArial(7, true), alignment: alignLeft, border: borderAll });
-            setCell(r5, 1, emp.totalHours || '', { font: fontArial(8, true), alignment: alignCenter, border: borderAll });
+            setCell(r5, 1, emp.isEmpty ? '' : (emp.totalHours !== undefined && emp.totalHours !== null ? emp.totalHours : 0), { font: fontArial(8, true), alignment: alignCenter, border: borderAll });
 
             for (let d = 0; d < daysInMonth; d++) {
                 const col = d + 2;
@@ -2076,8 +2164,8 @@
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        const depStr = currentLoadedScheduleName ? currentLoadedScheduleName : (department ? department.toUpperCase().trim() : 'DEPOSITO');
-        a.download = `CRONOGRAMA ${depStr}.xlsx`;
+        const depNameXls = department ? department.toUpperCase().trim() : 'DEPOSITO';
+        a.download = `CRONOGRAMA ${depNameXls} ${MONTH_NAMES[month].toUpperCase()} ${year}.xlsx`;
         a.click();
         window.URL.revokeObjectURL(url);
     }
@@ -2118,10 +2206,12 @@
                 d = runEnd + 1;
             } else if (day.type !== 'work') {
                 const label = day.type === 'franco' ? 'F' : day.type === 'descanso' ? 'D' : 'A';
+                const francoColor = day.type === 'franco' ? 'FF0000' : fontColor;
+                const francoFontArial = (size) => ({ name: 'Arial', size, bold: true, color: { argb: 'FF' + francoColor } });
                 ws.mergeCells(r3, col, r4, col);
                 const cell = ws.getRow(r3).getCell(col);
                 cell.value = label;
-                cell.font = fontArial(16);
+                cell.font = francoFontArial(16);
                 cell.alignment = alignCenter;
                 cell.border = borderAll;
                 processed[d] = true;
