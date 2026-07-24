@@ -1,6 +1,6 @@
 // ============================================================
 // CronoExcel — app.js
-// Complete schedule automation with ExcelJS export, Holidays & Weeks PROBANDO
+// Complete schedule automation with ExcelJS export, Holidays & Weeks
 // ============================================================
 
 (() => {
@@ -186,6 +186,7 @@
                 const data = {
                     employees: employees.map(e => ({
                         name: e.name, hours: e.hours,
+                        esPrestador: e.esPrestador || false,
                         larEnabled: e.larEnabled, larStart: e.larStart, larEnd: e.larEnd,
                         larHoursPerDay: e.larHoursPerDay, days: e.days
                     })),
@@ -550,8 +551,9 @@
                         let runEnd = d;
                         while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'lar') runEnd++;
                         const runLen = runEnd - d + 1;
-                        
-                        er3.push({ content: `L.A.R. ${runLen} DIAS`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 10 : 6, textColor: [0,0,0] } });
+                        const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${year} ${runLen} DIAS` : `L.A.R. ${runLen} DIAS`;
+                        const larFontSize = emp.esPrestador ? (runLen >= 6 ? 8 : runLen >= 4 ? 7 : 5) : (runLen >= 4 ? 10 : 6);
+                        er3.push({ content: larLabel, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: larFontSize, textColor: [0,0,0] } });
                         d = runEnd + 1;
                     } else if (day.type !== 'work') {
                         const label = day.type === 'franco' ? 'F' : day.type === 'descanso' ? 'D' : 'A';
@@ -674,10 +676,12 @@
     function renderBrushToolbar() {
         DOM.brushList.innerHTML = '';
         const allBrushes = [...DEFAULT_BRUSHES, ...customBrushes];
+        const hayPrestador = employees.some(e => e.esPrestador);
         allBrushes.forEach(brush => {
             const btn = document.createElement('button');
             btn.className = `brush-btn ${activeBrush === brush.id ? 'active' : ''}`;
-            btn.textContent = brush.label;
+            const displayLabel = (brush.type === 'lar' && hayPrestador) ? 'COMP. H.' : brush.label;
+            btn.textContent = displayLabel;
             btn.onclick = () => {
                 activeBrush = activeBrush === brush.id ? null : brush.id;
                 document.body.classList.toggle('brush-active', activeBrush !== null);
@@ -1202,6 +1206,7 @@
             id,
             name: data?.name || '',
             hours: data?.hours || parseInt(DOM.targetHours.value) || 220,
+            esPrestador: data?.esPrestador || false,
             larEnabled: data?.larEnabled || false,
             larStart: data?.larStart || null,
             larEnd: data?.larEnd || null,
@@ -1261,6 +1266,7 @@
             addEmployee({
                 name: emp.name ? emp.name + ' (Copia)' : '',
                 hours: emp.hours,
+                esPrestador: emp.esPrestador,
                 larEnabled: emp.larEnabled,
                 larStart: emp.larStart,
                 larEnd: emp.larEnd,
@@ -1302,6 +1308,31 @@
             body.classList.toggle('collapsed');
             const svg = e.currentTarget.querySelector('svg');
             svg.style.transform = body.classList.contains('collapsed') ? 'rotate(-90deg)' : '';
+        });
+
+        // Prestador toggle
+        const prestadorToggle = card.querySelector('.emp-prestador-toggle');
+        const larLabelSpan = card.querySelector('.emp-lar-label');
+        prestadorToggle.checked = emp.esPrestador || false;
+
+        function updateLarLabel() {
+            if (larLabelSpan) {
+                larLabelSpan.textContent = emp.esPrestador ? 'Comp. H.' : 'L.A.R.';
+            }
+        }
+        updateLarLabel();
+
+        prestadorToggle.addEventListener('change', () => {
+            emp.esPrestador = prestadorToggle.checked;
+            updateLarLabel();
+            renderBrushToolbar();
+            // Re-render weeks to update day type dropdowns
+            const weeksContainer = card.querySelector('.employee-weeks-container');
+            if (weeksContainer) {
+                weeksContainer.innerHTML = '';
+                renderWeeksGrid(weeksContainer, emp.id);
+            }
+            autoSave();
         });
 
         const larToggle = card.querySelector('.emp-lar-toggle');
@@ -1470,7 +1501,7 @@
                 TYPE_OPTIONS.forEach(opt => {
                     const o = document.createElement('option');
                     o.value = opt.value;
-                    o.textContent = opt.label;
+                    o.textContent = (opt.value === 'lar' && emp.esPrestador) ? 'COMP. H.' : opt.label;
                     if (opt.value === day.type) o.selected = true;
                     typeSelect.appendChild(o);
                 });
@@ -1657,6 +1688,7 @@
             const totalHours = finalDays.reduce((sum, d) => sum + d.hours, 0);
             return {
                 name: emp.name,
+                esPrestador: emp.esPrestador || false,
                 targetHours: emp.hours,
                 totalHours,
                 diff: totalHours - emp.hours,
@@ -1782,7 +1814,7 @@
                     content = 'A';
                 } else if (day.type === 'lar') {
                     cls = 'cell-lar';
-                    content = 'L.A.R.';
+                    content = emp.esPrestador ? 'C.H.' : 'L.A.R.';
                 }
                 // Outline if it's red day but worked
                 if (day.isRed && day.type === 'work') cls += ' cell-ausente'; 
@@ -1919,8 +1951,9 @@
                         let runEnd = d;
                         while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'lar') runEnd++;
                         const runLen = runEnd - d + 1;
-                        
-                        er3.push({ content: `L.A.R. ${runLen} DIAS`, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: runLen >= 4 ? 10 : 6, textColor: [0,0,0] } });
+                        const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${year} ${runLen} DIAS` : `L.A.R. ${runLen} DIAS`;
+                        const larFontSize = emp.esPrestador ? (runLen >= 6 ? 8 : runLen >= 4 ? 7 : 5) : (runLen >= 4 ? 10 : 6);
+                        er3.push({ content: larLabel, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: larFontSize, textColor: [0,0,0] } });
                         d = runEnd + 1;
                     } else if (day.type !== 'work') {
                         const label = day.type === 'franco' ? 'F' : day.type === 'descanso' ? 'D' : 'A';
@@ -2197,8 +2230,9 @@
                 else ws.mergeCells(r3, colStart, r4, colStart);
 
                 const cell = ws.getRow(r3).getCell(colStart);
-                cell.value = `L.A.R. ${runLen} DIAS`;
-                const fontSize = runLen >= 5 ? 16 : runLen === 4 ? 14 : runLen === 3 ? 12 : 8;
+                const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${generatedSchedule.year} ${runLen} DIAS` : `L.A.R. ${runLen} DIAS`;
+                cell.value = larLabel;
+                const fontSize = emp.esPrestador ? (runLen >= 5 ? 12 : runLen === 4 ? 10 : runLen === 3 ? 9 : 7) : (runLen >= 5 ? 16 : runLen === 4 ? 14 : runLen === 3 ? 12 : 8);
                 cell.font = { name: 'Arial', size: fontSize, bold: true, color: { argb: 'FF000000' } };
                 cell.alignment = alignCenter;
                 cell.border = borderAll;
@@ -2434,7 +2468,8 @@
                 targetHours: DOM.targetHours.value,
                 holidays: currentHolidays.filter(h => h.custom),
                 employees: employees.map(e => ({
-                    name: e.name, hours: e.hours, 
+                    name: e.name, hours: e.hours,
+                    esPrestador: e.esPrestador || false,
                     larEnabled: e.larEnabled, larStart: e.larStart, larEnd: e.larEnd,
                     larHoursPerDay: e.larHoursPerDay,
                     days: e.days
