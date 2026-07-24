@@ -551,7 +551,7 @@
                         let runEnd = d;
                         while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'lar') runEnd++;
                         const runLen = runEnd - d + 1;
-                        const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${year} ${runLen} DIAS` : `L.A.R. ${runLen} DIAS`;
+                        const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${year} (${runLen} DIAS)` : `L.A.R. ${runLen} DIAS`;
                         const larFontSize = emp.esPrestador ? (runLen >= 6 ? 8 : runLen >= 4 ? 7 : 5) : (runLen >= 4 ? 10 : 6);
                         er3.push({ content: larLabel, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: larFontSize, textColor: [0,0,0] } });
                         d = runEnd + 1;
@@ -1951,7 +1951,7 @@
                         let runEnd = d;
                         while (runEnd + 1 < daysInMonth && emp.days[runEnd + 1].type === 'lar') runEnd++;
                         const runLen = runEnd - d + 1;
-                        const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${year} ${runLen} DIAS` : `L.A.R. ${runLen} DIAS`;
+                        const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${year} (${runLen} DIAS)` : `L.A.R. ${runLen} DIAS`;
                         const larFontSize = emp.esPrestador ? (runLen >= 6 ? 8 : runLen >= 4 ? 7 : 5) : (runLen >= 4 ? 10 : 6);
                         er3.push({ content: larLabel, colSpan: runLen, rowSpan: 2, styles: { halign: 'center', valign: 'middle', fontStyle: 'bold', fontSize: larFontSize, textColor: [0,0,0] } });
                         d = runEnd + 1;
@@ -2230,7 +2230,7 @@
                 else ws.mergeCells(r3, colStart, r4, colStart);
 
                 const cell = ws.getRow(r3).getCell(colStart);
-                const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${generatedSchedule.year} ${runLen} DIAS` : `L.A.R. ${runLen} DIAS`;
+                const larLabel = emp.esPrestador ? `COMPENSACIÓN HORARIA ${generatedSchedule.year} (${runLen} DIAS)` : `L.A.R. ${runLen} DIAS`;
                 cell.value = larLabel;
                 const fontSize = emp.esPrestador ? (runLen >= 5 ? 12 : runLen === 4 ? 10 : runLen === 3 ? 9 : 7) : (runLen >= 5 ? 16 : runLen === 4 ? 14 : runLen === 3 ? 12 : 8);
                 cell.font = { name: 'Arial', size: fontSize, bold: true, color: { argb: 'FF000000' } };
